@@ -34,6 +34,7 @@ else:
             f"{m.get('session_id','?')} | "
             f"status={m.get('status','?')} | "
             f"points={m.get('point_count','?')} | "
-            f"date={m.get('session_date','?')}"
+            f"date={m.get('session_date','?')} | "
+            f"meta_v={m.get('meta_schema_version',1)}"
         )
 PY

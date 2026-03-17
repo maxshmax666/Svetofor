@@ -23,6 +23,7 @@ class SessionMeta:
     device: Dict[str, Any]
     client: Dict[str, Any]
     sampling: Dict[str, Any]
+    meta_schema_version: int = 2
 
     def to_dict(self) -> Dict[str, Any]:
         return asdict(self)
