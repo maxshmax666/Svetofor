@@ -1,9 +1,13 @@
 from __future__ import annotations
+import json
+import logging
 import random
 import string
+import threading
 from datetime import datetime
+from contextlib import contextmanager
 from pathlib import Path
-from typing import Any, Dict, Optional, Tuple
+from typing import Any, Dict, Iterator, Optional, Tuple
 
 from app.config import (
     CSV_HEADER,
@@ -78,6 +82,59 @@ def _manifest_append(meta: SessionMeta) -> None:
     append_jsonl(SESSIONS_INDEX_FILE, meta.to_dict())
 
 
+LOGGER = logging.getLogger(__name__)
+_SESSION_LOCKS: Dict[str, threading.Lock] = {}
+_SESSION_LOCKS_GUARD = threading.Lock()
+
+
+def _write_json_atomic(path: Path, payload: Dict[str, Any]) -> None:
+    """Write JSON payload atomically via temp file + rename."""
+    ensure_dir(path.parent)
+    tmp_path = path.with_suffix(f"{path.suffix}.tmp")
+    tmp_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+    tmp_path.replace(path)
+
+
+def _scan_max_seq(path: Path, seq_field: str) -> Optional[int]:
+    if not path.exists():
+        return None
+
+    max_seq: Optional[int] = None
+    with path.open("r", encoding="utf-8") as file:
+        for line in file:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                row = json.loads(line)
+                seq_value = int(row.get(seq_field))
+            except (ValueError, TypeError, AttributeError):
+                continue
+            if max_seq is None or seq_value > max_seq:
+                max_seq = seq_value
+    return max_seq
+
+
+def _warn_seq_anomaly(session_id: str, events_path: Path, seq_kind: str, seq_value: int, known_max: int) -> None:
+    message = (
+        f"{seq_kind} anomaly for session={session_id}: "
+        f"calculated_seq={seq_value} is not unique (known_max={known_max})"
+    )
+    LOGGER.warning(message)
+    append_text_line(events_path, f"{_now_iso()} WARN {message}")
+
+
+@contextmanager
+def _session_lock(session_id: str) -> Iterator[None]:
+    with _SESSION_LOCKS_GUARD:
+        lock = _SESSION_LOCKS.setdefault(session_id, threading.Lock())
+    lock.acquire()
+    try:
+        yield
+    finally:
+        lock.release()
+
+
 def create_session(payload: Dict[str, Any]) -> Dict[str, Any]:
     sid = generate_session_id()
     session_date = _today_dir()
@@ -150,7 +207,7 @@ def load_session_meta(session_id: str, session_date: Optional[str] = None) -> Di
 def save_session_meta(meta: Dict[str, Any]) -> None:
     sdir = Path(meta["points_file_jsonl"]).parent
     ensure_dir(sdir)
-    write_json(sdir / "meta.json", meta)
+    _write_json_atomic(sdir / "meta.json", meta)
 
 
 def _coerce_float(value: Any) -> Optional[float]:
@@ -186,10 +243,6 @@ def _coerce_bool(value: Any) -> Optional[bool]:
 
 
 def append_point(session_id: str, payload: Dict[str, Any]) -> Tuple[Dict[str, Any], Dict[str, Any]]:
-    meta = load_session_meta(session_id)
-    if meta["status"] not in ("active", "interrupted"):
-        raise ValueError(f"Session {session_id} is not active")
-
     lat = _coerce_float(payload.get("latitude"))
     lon = _coerce_float(payload.get("longitude"))
 
@@ -200,92 +253,106 @@ def append_point(session_id: str, payload: Dict[str, Any]) -> Tuple[Dict[str, An
     if not (-180.0 <= lon <= 180.0):
         raise ValueError("longitude out of range")
 
-    point_seq = int(meta.get("point_count", 0)) + 1
+    with _session_lock(session_id):
+        meta = load_session_meta(session_id)
+        if meta["status"] not in ("active", "interrupted"):
+            raise ValueError(f"Session {session_id} is not active")
 
-    point = RawPoint(
-        session_id=session_id,
-        point_seq=point_seq,
-        client_timestamp_ms=_coerce_int(payload.get("clientTimestampMs") or payload.get("timestampMs")),
-        client_iso_time=payload.get("clientIsoTime") or payload.get("isoTime"),
-        client_local_time=payload.get("clientLocalTime") or payload.get("localTime"),
-        server_received_at=_now_iso(),
-        latitude=lat,
-        longitude=lon,
-        accuracy_m=_coerce_float(payload.get("accuracyM") or payload.get("accuracy")),
-        altitude_m=_coerce_float(payload.get("altitudeM") or payload.get("altitude")),
-        altitude_accuracy_m=_coerce_float(payload.get("altitudeAccuracyM") or payload.get("altitudeAccuracy")),
-        heading_deg=_coerce_float(payload.get("headingDeg") or payload.get("heading")),
-        speed_mps=_coerce_float(payload.get("speedMps")),
-        speed_kmh=_coerce_float(payload.get("speedKmh")),
-        battery_level=_coerce_int(payload.get("batteryLevel")),
-        is_screen_visible=_coerce_bool(payload.get("isScreenVisible")),
-        sample_source=payload.get("sampleSource") or "browser_geolocation",
-        raw_position_timestamp_ms=_coerce_int(payload.get("rawPositionTimestampMs") or payload.get("positionTimestampMs")),
-        user_agent=payload.get("userAgent"),
-    )
+        jsonl_path = Path(meta["points_file_jsonl"])
+        csv_path = Path(meta["points_file_csv"])
+        events_path = Path(meta["events_file"])
 
-    jsonl_path = Path(meta["points_file_jsonl"])
-    csv_path = Path(meta["points_file_csv"])
-    events_path = Path(meta["events_file"])
+        point_seq = int(meta.get("point_count", 0)) + 1
+        file_max_seq = _scan_max_seq(jsonl_path, "point_seq")
+        if file_max_seq is not None and point_seq <= file_max_seq:
+            _warn_seq_anomaly(session_id, events_path, "point_seq", point_seq, file_max_seq)
+            point_seq = file_max_seq + 1
 
-    append_jsonl(jsonl_path, point.to_dict())
-    append_csv_row(csv_path, CSV_HEADER, point.to_dict())
-    append_text_line(events_path, f"{_now_iso()} point_appended seq={point_seq}")
+        point = RawPoint(
+            session_id=session_id,
+            point_seq=point_seq,
+            client_timestamp_ms=_coerce_int(payload.get("clientTimestampMs") or payload.get("timestampMs")),
+            client_iso_time=payload.get("clientIsoTime") or payload.get("isoTime"),
+            client_local_time=payload.get("clientLocalTime") or payload.get("localTime"),
+            server_received_at=_now_iso(),
+            latitude=lat,
+            longitude=lon,
+            accuracy_m=_coerce_float(payload.get("accuracyM") or payload.get("accuracy")),
+            altitude_m=_coerce_float(payload.get("altitudeM") or payload.get("altitude")),
+            altitude_accuracy_m=_coerce_float(payload.get("altitudeAccuracyM") or payload.get("altitudeAccuracy")),
+            heading_deg=_coerce_float(payload.get("headingDeg") or payload.get("heading")),
+            speed_mps=_coerce_float(payload.get("speedMps")),
+            speed_kmh=_coerce_float(payload.get("speedKmh")),
+            battery_level=_coerce_int(payload.get("batteryLevel")),
+            is_screen_visible=_coerce_bool(payload.get("isScreenVisible")),
+            sample_source=payload.get("sampleSource") or "browser_geolocation",
+            raw_position_timestamp_ms=_coerce_int(payload.get("rawPositionTimestampMs") or payload.get("positionTimestampMs")),
+            user_agent=payload.get("userAgent"),
+        )
 
-    meta["point_count"] = point_seq
-    save_session_meta(meta)
-    return meta, point.to_dict()
+        append_jsonl(jsonl_path, point.to_dict())
+        append_csv_row(csv_path, CSV_HEADER, point.to_dict())
+        append_text_line(events_path, f"{_now_iso()} point_appended seq={point_seq}")
+
+        meta["point_count"] = point_seq
+        save_session_meta(meta)
+        return meta, point.to_dict()
 
 
 def append_sensor_event(session_id: str, payload: Dict[str, Any]) -> Tuple[Dict[str, Any], Dict[str, Any]]:
-    meta = load_session_meta(session_id)
-    if meta["status"] not in ("active", "interrupted"):
-        raise ValueError(f"Session {session_id} is not active")
-
     event_type = (payload.get("eventType") or "").strip()
     if not event_type:
         raise ValueError("eventType required")
 
-    event_seq = int(meta.get("sensor_event_count", 0)) + 1
+    with _session_lock(session_id):
+        meta = load_session_meta(session_id)
+        if meta["status"] not in ("active", "interrupted"):
+            raise ValueError(f"Session {session_id} is not active")
 
-    event = SensorEvent(
-        session_id=session_id,
-        event_seq=event_seq,
-        event_type=event_type,
-        client_timestamp_ms=_coerce_int(payload.get("clientTimestampMs") or payload.get("timestampMs")),
-        client_iso_time=payload.get("clientIsoTime") or payload.get("isoTime"),
-        client_local_time=payload.get("clientLocalTime") or payload.get("localTime"),
-        server_received_at=_now_iso(),
-        value_x=_coerce_float(payload.get("valueX")),
-        value_y=_coerce_float(payload.get("valueY")),
-        value_z=_coerce_float(payload.get("valueZ")),
-        alpha=_coerce_float(payload.get("alpha")),
-        beta=_coerce_float(payload.get("beta")),
-        gamma=_coerce_float(payload.get("gamma")),
-        heading_deg=_coerce_float(payload.get("headingDeg") or payload.get("heading")),
-        battery_level=_coerce_int(payload.get("batteryLevel")),
-        is_charging=_coerce_bool(payload.get("isCharging")),
-        is_screen_visible=_coerce_bool(payload.get("isScreenVisible")),
-        sample_source=payload.get("sampleSource") or "browser_sensor",
-        user_agent=payload.get("userAgent"),
-    )
+        jsonl_path = Path(meta["sensor_events_file_jsonl"])
+        csv_path = Path(meta["sensor_events_file_csv"])
+        events_path = Path(meta["events_file"])
 
-    jsonl_path = Path(meta["sensor_events_file_jsonl"])
-    csv_path = Path(meta["sensor_events_file_csv"])
-    events_path = Path(meta["events_file"])
+        event_seq = int(meta.get("sensor_event_count", 0)) + 1
+        file_max_seq = _scan_max_seq(jsonl_path, "event_seq")
+        if file_max_seq is not None and event_seq <= file_max_seq:
+            _warn_seq_anomaly(session_id, events_path, "event_seq", event_seq, file_max_seq)
+            event_seq = file_max_seq + 1
 
-    append_jsonl(jsonl_path, event.to_dict())
-    append_csv_row(csv_path, SENSOR_CSV_HEADER, event.to_dict())
-    append_text_line(events_path, f"{_now_iso()} sensor_event_appended seq={event_seq} type={event_type}")
+        event = SensorEvent(
+            session_id=session_id,
+            event_seq=event_seq,
+            event_type=event_type,
+            client_timestamp_ms=_coerce_int(payload.get("clientTimestampMs") or payload.get("timestampMs")),
+            client_iso_time=payload.get("clientIsoTime") or payload.get("isoTime"),
+            client_local_time=payload.get("clientLocalTime") or payload.get("localTime"),
+            server_received_at=_now_iso(),
+            value_x=_coerce_float(payload.get("valueX")),
+            value_y=_coerce_float(payload.get("valueY")),
+            value_z=_coerce_float(payload.get("valueZ")),
+            alpha=_coerce_float(payload.get("alpha")),
+            beta=_coerce_float(payload.get("beta")),
+            gamma=_coerce_float(payload.get("gamma")),
+            heading_deg=_coerce_float(payload.get("headingDeg") or payload.get("heading")),
+            battery_level=_coerce_int(payload.get("batteryLevel")),
+            is_charging=_coerce_bool(payload.get("isCharging")),
+            is_screen_visible=_coerce_bool(payload.get("isScreenVisible")),
+            sample_source=payload.get("sampleSource") or "browser_sensor",
+            user_agent=payload.get("userAgent"),
+        )
 
-    meta["sensor_event_count"] = event_seq
-    streams = meta.get("sensor_streams") or {}
-    if event_type in streams:
-        streams[event_type] = True
-    meta["sensor_streams"] = streams
+        append_jsonl(jsonl_path, event.to_dict())
+        append_csv_row(csv_path, SENSOR_CSV_HEADER, event.to_dict())
+        append_text_line(events_path, f"{_now_iso()} sensor_event_appended seq={event_seq} type={event_type}")
 
-    save_session_meta(meta)
-    return meta, event.to_dict()
+        meta["sensor_event_count"] = event_seq
+        streams = meta.get("sensor_streams") or {}
+        if event_type in streams:
+            streams[event_type] = True
+        meta["sensor_streams"] = streams
+
+        save_session_meta(meta)
+        return meta, event.to_dict()
 
 
 def stop_session(session_id: str) -> Dict[str, Any]:
