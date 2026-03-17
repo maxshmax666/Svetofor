@@ -65,5 +65,64 @@ class SessionManagerFallbackTests(unittest.TestCase):
             self.assertTrue((session_root / "meta.json").exists())
 
 
+    def test_append_point_warns_and_recovers_on_duplicate_seq(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            sessions_dir = Path(tmpdir)
+            session_id = "gps-duplicate-seq"
+            today = datetime.utcnow().strftime("%Y-%m-%d")
+            session_root = sessions_dir / today / session_id
+            session_root.mkdir(parents=True, exist_ok=True)
+
+            meta = {
+                "session_id": session_id,
+                "created_at": "2026-01-01T10:00:00Z",
+                "closed_at": None,
+                "status": "active",
+                "session_date": today,
+                "points_file_jsonl": str(session_root / "points.jsonl"),
+                "points_file_csv": str(session_root / "points.csv"),
+                "sensor_events_file_jsonl": str(session_root / "sensor_events.jsonl"),
+                "sensor_events_file_csv": str(session_root / "sensor_events.csv"),
+                "events_file": str(session_root / "events.log"),
+                "point_count": 1,
+                "sensor_event_count": 0,
+                "sensor_streams": {
+                    "accelerometer": False,
+                    "gyroscope": False,
+                    "orientation": False,
+                    "visibility_change": False,
+                    "battery_status": False,
+                },
+                "device": {"user_agent": "pytest", "platform_hint": "android"},
+                "client": {"timezone": "UTC", "language": "ru-RU"},
+                "sampling": {
+                    "enable_high_accuracy": True,
+                    "maximum_age_ms": 0,
+                    "timeout_ms": 10000,
+                    "sensor_throttle_ms": 200,
+                },
+            }
+            write_json(session_root / "meta.json", meta)
+            (session_root / "points.jsonl").write_text(
+                '{"session_id":"gps-duplicate-seq","point_seq":2}\n',
+                encoding="utf-8",
+            )
+
+            with patch.object(sm, "SESSIONS_DIR", sessions_dir), self.assertLogs(sm.LOGGER, level="WARNING") as logs:
+                updated_meta, point = sm.append_point(
+                    session_id,
+                    {
+                        "latitude": 55.751244,
+                        "longitude": 37.618423,
+                    },
+                )
+
+            self.assertEqual(updated_meta["point_count"], 3)
+            self.assertEqual(point["point_seq"], 3)
+            self.assertTrue(any("point_seq anomaly" in msg for msg in logs.output))
+            events_text = (session_root / "events.log").read_text(encoding="utf-8")
+            self.assertIn("WARN point_seq anomaly", events_text)
+
+
 if __name__ == "__main__":
     unittest.main()
