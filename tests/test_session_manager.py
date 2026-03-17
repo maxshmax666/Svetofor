@@ -253,6 +253,36 @@ class SessionManagerSensorValidationTests(unittest.TestCase):
             self.assertEqual(event["battery_level"], 85)
 
 
+class SessionManagerIndexConsistencyTests(unittest.TestCase):
+    def test_query_index_matches_meta_status_and_counters(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            sessions_dir = root / "sessions"
+            manifests_dir = root / "manifests"
+            sessions_index_file = manifests_dir / "sessions_index.jsonl"
+            sessions_query_index_file = manifests_dir / "sessions_index.json"
+
+            with patch.object(sm, "SESSIONS_DIR", sessions_dir), \
+                patch.object(sm, "SESSIONS_INDEX_FILE", sessions_index_file), \
+                patch.object(sm, "SESSIONS_QUERY_INDEX_FILE", sessions_query_index_file):
+                created = sm.create_session({"userAgent": "pytest"})
+                sid = created["session_id"]
+
+                sm.append_point(sid, {"latitude": 55.751244, "longitude": 37.618423})
+                sm.append_sensor_event(sid, {"eventType": "accelerometer", "valueX": 0.1})
+                sm.stop_session(sid)
+
+                meta = sm.load_session_meta(sid)
+                query_index = read_json(sessions_query_index_file)
+
+            self.assertIn(sid, query_index)
+            index_row = query_index[sid]
+            self.assertEqual(index_row["status"], meta["status"])
+            self.assertEqual(index_row["point_count"], meta["point_count"])
+            self.assertEqual(index_row["sensor_event_count"], meta["sensor_event_count"])
+
+
+
 class SessionManagerCsvMaterializationTests(unittest.TestCase):
     def test_append_point_does_not_write_csv_in_hot_path(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
