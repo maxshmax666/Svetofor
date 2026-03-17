@@ -1,19 +1,17 @@
 from __future__ import annotations
-import io
 import json
-import tarfile
 from pathlib import Path
 
 from flask import Flask, jsonify, request, send_file, Response
 
 from app.config import (
-    EXPORTS_DIR,
     HOST,
     PORT,
     RUN_DIR,
     SESSIONS_DIR,
     TIMEZONE_NAME,
 )
+from app.export_session import export_session_archive
 from app.session_manager import (
     append_point,
     append_sensor_event,
@@ -130,25 +128,13 @@ def api_sessions():
 
 @app.get("/api/export/session/<session_id>.tar.gz")
 def api_export_session(session_id: str):
-    target_dir = None
-    for candidate in SESSIONS_DIR.glob(f"*/*"):
-        if candidate.is_dir() and candidate.name == session_id:
-            target_dir = candidate
-            break
-
-    if target_dir is None:
+    try:
+        archive_path = export_session_archive(session_id)
+    except FileNotFoundError:
         return jsonify({"ok": False, "error": "session not found"}), 404
 
-    EXPORTS_DIR.mkdir(parents=True, exist_ok=True)
-    memory_file = io.BytesIO()
-
-    with tarfile.open(fileobj=memory_file, mode="w:gz") as tar:
-        for child in target_dir.iterdir():
-            tar.add(child, arcname=f"{session_id}/{child.name}")
-
-    memory_file.seek(0)
     return send_file(
-        memory_file,
+        archive_path,
         mimetype="application/gzip",
         as_attachment=True,
         download_name=f"{session_id}.tar.gz",

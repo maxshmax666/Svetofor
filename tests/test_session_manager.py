@@ -29,6 +29,8 @@ class SessionManagerFallbackTests(unittest.TestCase):
                 "points_file_csv": str(session_root / "points.csv"),
                 "sensor_events_file_jsonl": str(session_root / "sensor_events.jsonl"),
                 "sensor_events_file_csv": str(session_root / "sensor_events.csv"),
+                "csv_materialized": False,
+                "csv_last_exported_at": None,
                 "events_file": str(session_root / "events.log"),
                 "point_count": 0,
                 "sensor_event_count": 0,
@@ -83,6 +85,8 @@ class SessionManagerFallbackTests(unittest.TestCase):
                 "points_file_csv": str(session_root / "points.csv"),
                 "sensor_events_file_jsonl": str(session_root / "sensor_events.jsonl"),
                 "sensor_events_file_csv": str(session_root / "sensor_events.csv"),
+                "csv_materialized": False,
+                "csv_last_exported_at": None,
                 "events_file": str(session_root / "events.log"),
                 "point_count": 1,
                 "sensor_event_count": 0,
@@ -136,6 +140,8 @@ class SessionManagerSensorValidationTests(unittest.TestCase):
             "points_file_csv": str(session_root / "points.csv"),
             "sensor_events_file_jsonl": str(session_root / "sensor_events.jsonl"),
             "sensor_events_file_csv": str(session_root / "sensor_events.csv"),
+            "csv_materialized": False,
+            "csv_last_exported_at": None,
             "events_file": str(session_root / "events.log"),
             "point_count": 0,
             "sensor_event_count": 0,
@@ -195,6 +201,116 @@ class SessionManagerSensorValidationTests(unittest.TestCase):
             self.assertEqual(updated_meta["sensor_event_count"], 1)
             self.assertEqual(event["event_type"], "battery_status")
             self.assertEqual(event["battery_level"], 85)
+
+
+class SessionManagerCsvMaterializationTests(unittest.TestCase):
+    def test_append_point_does_not_write_csv_in_hot_path(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            sessions_dir = Path(tmpdir)
+            session_id = "gps-no-hotpath-csv"
+            today = datetime.utcnow().strftime("%Y-%m-%d")
+            session_root = sessions_dir / today / session_id
+            session_root.mkdir(parents=True, exist_ok=True)
+
+            meta = {
+                "session_id": session_id,
+                "created_at": "2026-01-01T10:00:00Z",
+                "closed_at": None,
+                "status": "active",
+                "session_date": today,
+                "points_file_jsonl": str(session_root / "points.jsonl"),
+                "points_file_csv": str(session_root / "points.csv"),
+                "sensor_events_file_jsonl": str(session_root / "sensor_events.jsonl"),
+                "sensor_events_file_csv": str(session_root / "sensor_events.csv"),
+                "csv_materialized": False,
+                "csv_last_exported_at": None,
+                "events_file": str(session_root / "events.log"),
+                "point_count": 0,
+                "sensor_event_count": 0,
+                "sensor_streams": {
+                    "accelerometer": False,
+                    "gyroscope": False,
+                    "orientation": False,
+                    "visibility_change": False,
+                    "battery_status": False,
+                },
+                "device": {"user_agent": "pytest", "platform_hint": "android"},
+                "client": {"timezone": "UTC", "language": "ru-RU"},
+                "sampling": {
+                    "enable_high_accuracy": True,
+                    "maximum_age_ms": 0,
+                    "timeout_ms": 10000,
+                    "sensor_throttle_ms": 200,
+                },
+            }
+            write_json(session_root / "meta.json", meta)
+
+            with patch.object(sm, "SESSIONS_DIR", sessions_dir):
+                sm.append_point(session_id, {"latitude": 55.751244, "longitude": 37.618423})
+
+            self.assertTrue((session_root / "points.jsonl").exists())
+            self.assertFalse((session_root / "points.csv").exists())
+            events_text = (session_root / "events.log").read_text(encoding="utf-8") if (session_root / "events.log").exists() else ""
+            self.assertNotIn("point_appended", events_text)
+
+    def test_materialize_session_csv_rebuilds_csv_and_updates_meta(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            sessions_dir = Path(tmpdir)
+            session_id = "gps-materialize-csv"
+            today = datetime.utcnow().strftime("%Y-%m-%d")
+            session_root = sessions_dir / today / session_id
+            session_root.mkdir(parents=True, exist_ok=True)
+
+            meta = {
+                "session_id": session_id,
+                "created_at": "2026-01-01T10:00:00Z",
+                "closed_at": None,
+                "status": "active",
+                "session_date": today,
+                "points_file_jsonl": str(session_root / "points.jsonl"),
+                "points_file_csv": str(session_root / "points.csv"),
+                "sensor_events_file_jsonl": str(session_root / "sensor_events.jsonl"),
+                "sensor_events_file_csv": str(session_root / "sensor_events.csv"),
+                "csv_materialized": False,
+                "csv_last_exported_at": None,
+                "events_file": str(session_root / "events.log"),
+                "point_count": 1,
+                "sensor_event_count": 1,
+                "sensor_streams": {
+                    "accelerometer": True,
+                    "gyroscope": False,
+                    "orientation": False,
+                    "visibility_change": False,
+                    "battery_status": False,
+                },
+                "device": {"user_agent": "pytest", "platform_hint": "android"},
+                "client": {"timezone": "UTC", "language": "ru-RU"},
+                "sampling": {
+                    "enable_high_accuracy": True,
+                    "maximum_age_ms": 0,
+                    "timeout_ms": 10000,
+                    "sensor_throttle_ms": 200,
+                },
+            }
+            write_json(session_root / "meta.json", meta)
+            (session_root / "points.jsonl").write_text(
+                '{"session_id":"gps-materialize-csv","point_seq":1,"latitude":55.1,"longitude":37.1}\n',
+                encoding="utf-8",
+            )
+            (session_root / "sensor_events.jsonl").write_text(
+                '{"session_id":"gps-materialize-csv","event_seq":1,"event_type":"accelerometer","value_x":0.1}\n',
+                encoding="utf-8",
+            )
+
+            with patch.object(sm, "SESSIONS_DIR", sessions_dir):
+                updated_meta = sm.materialize_session_csv(session_id)
+
+            self.assertTrue((session_root / "points.csv").exists())
+            self.assertTrue((session_root / "sensor_events.csv").exists())
+            self.assertTrue(updated_meta["csv_materialized"])
+            self.assertIsNotNone(updated_meta["csv_last_exported_at"])
+            events_text = (session_root / "events.log").read_text(encoding="utf-8")
+            self.assertIn("csv_materialized", events_text)
 
 
 if __name__ == "__main__":
