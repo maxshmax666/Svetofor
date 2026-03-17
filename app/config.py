@@ -11,7 +11,8 @@ RUN_DIR = BASE_DIR / "run"
 
 PID_FILE = RUN_DIR / "gps_logger.pid"
 SERVER_LOG_FILE = RUN_DIR / "server.log"
-SESSIONS_INDEX_FILE = MANIFESTS_DIR / "sessions_index.jsonl"
+SESSIONS_INDEX_FILE = MANIFESTS_DIR / "sessions_index.jsonl"  # append-only audit trail
+SESSIONS_QUERY_INDEX_FILE = MANIFESTS_DIR / "sessions_index.json"  # upsert query index
 
 HOST = "127.0.0.1"
 PORT = 18080

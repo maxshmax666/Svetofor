@@ -15,6 +15,7 @@ from app.config import (
     SENSOR_CSV_HEADER,
     SESSIONS_DIR,
     SESSIONS_INDEX_FILE,
+    SESSIONS_QUERY_INDEX_FILE,
     TIMEZONE_NAME,
 )
 from app.models import SessionMeta, RawPoint, SensorEvent
@@ -79,8 +80,37 @@ def session_events_path(session_id: str, session_date: Optional[str] = None) -> 
 
 
 def _manifest_append(meta: SessionMeta) -> None:
+    """Append-only audit trail of session snapshots."""
     ensure_dir(SESSIONS_INDEX_FILE.parent)
     append_jsonl(SESSIONS_INDEX_FILE, meta.to_dict())
+
+
+def _query_index_upsert(meta: Dict[str, Any]) -> None:
+    """Upsert query index entry by session_id (JSON map for cheap updates)."""
+    ensure_dir(SESSIONS_QUERY_INDEX_FILE.parent)
+    index_payload: Dict[str, Dict[str, Any]] = {}
+    if SESSIONS_QUERY_INDEX_FILE.exists():
+        try:
+            current = read_json(SESSIONS_QUERY_INDEX_FILE)
+            if isinstance(current, dict):
+                index_payload = current
+        except Exception:
+            index_payload = {}
+
+    session_id = str(meta.get("session_id", "")).strip()
+    if not session_id:
+        return
+
+    index_payload[session_id] = {
+        "session_id": session_id,
+        "session_date": meta.get("session_date"),
+        "created_at": meta.get("created_at"),
+        "closed_at": meta.get("closed_at"),
+        "status": meta.get("status"),
+        "point_count": int(meta.get("point_count", 0) or 0),
+        "sensor_event_count": int(meta.get("sensor_event_count", 0) or 0),
+    }
+    _write_json_atomic(SESSIONS_QUERY_INDEX_FILE, index_payload)
 
 
 LOGGER = logging.getLogger(__name__)
@@ -186,6 +216,7 @@ def create_session(payload: Dict[str, Any]) -> Dict[str, Any]:
     write_json(session_meta_path(sid, session_date), meta.to_dict())
     append_text_line(session_events_path(sid, session_date), f"{_now_iso()} session_started {sid}")
     _manifest_append(meta)
+    _query_index_upsert(meta.to_dict())
     return meta.to_dict()
 
 
@@ -273,6 +304,7 @@ def save_session_meta(meta: Dict[str, Any]) -> None:
     sdir = Path(meta["points_file_jsonl"]).parent
     ensure_dir(sdir)
     _write_json_atomic(sdir / "meta.json", meta)
+    _query_index_upsert(meta)
 
 
 def _coerce_float(value: Any) -> Optional[float]:
@@ -465,15 +497,16 @@ def materialize_session_csv(session_id: str) -> Dict[str, Any]:
 
 
 def stop_session(session_id: str) -> Dict[str, Any]:
-    meta = load_session_meta(session_id)
-    if meta["status"] == "closed":
-        return meta
+    with _session_lock(session_id):
+        meta = load_session_meta(session_id)
+        if meta["status"] == "closed":
+            return meta
 
-    meta["status"] = "closed"
-    meta["closed_at"] = _now_iso()
-    save_session_meta(meta)
-    append_text_line(Path(meta["events_file"]), f"{_now_iso()} session_closed {session_id}")
-    return meta
+        meta["status"] = "closed"
+        meta["closed_at"] = _now_iso()
+        save_session_meta(meta)
+        append_text_line(Path(meta["events_file"]), f"{_now_iso()} session_closed {session_id}")
+        return meta
 
 
 def mark_interrupted_sessions() -> int:
@@ -491,6 +524,7 @@ def mark_interrupted_sessions() -> int:
             meta["status"] = "interrupted"
             _ensure_storage_model_defaults(meta)
             _write_json_atomic(meta_path, meta)
+            _query_index_upsert(meta)
             append_text_line(meta_path.parent / "events.log", f"{_now_iso()} session_interrupted {meta.get('session_id')}")
             changed += 1
 
