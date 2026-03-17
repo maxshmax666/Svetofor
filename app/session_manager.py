@@ -128,9 +128,23 @@ def create_session(payload: Dict[str, Any]) -> Dict[str, Any]:
 
 def load_session_meta(session_id: str, session_date: Optional[str] = None) -> Dict[str, Any]:
     path = session_meta_path(session_id, session_date)
-    if not path.exists():
-        raise FileNotFoundError(f"Session meta not found for {session_id}")
-    return read_json(path)
+    if path.exists():
+        return read_json(path)
+
+    matches = list(SESSIONS_DIR.glob(f"*/{session_id}/meta.json"))
+    if len(matches) == 1:
+        return read_json(matches[0])
+
+    if len(matches) > 1:
+        error_message = (
+            f"Session meta consistency error for {session_id}: "
+            f"found {len(matches)} meta.json matches"
+        )
+        for meta_path in matches:
+            append_text_line(meta_path.parent / "events.log", f"{_now_iso()} {error_message}")
+        raise RuntimeError(error_message)
+
+    raise FileNotFoundError(f"Session meta not found for {session_id}")
 
 
 def save_session_meta(meta: Dict[str, Any]) -> None:
