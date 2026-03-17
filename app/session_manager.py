@@ -86,6 +86,14 @@ def _manifest_append(meta: SessionMeta) -> None:
 LOGGER = logging.getLogger(__name__)
 _SESSION_LOCKS: Dict[str, threading.Lock] = {}
 _SESSION_LOCKS_GUARD = threading.Lock()
+_DEFAULT_SENSOR_STREAMS: Dict[str, bool] = {
+    "accelerometer": False,
+    "gyroscope": False,
+    "orientation": False,
+    "visibility_change": False,
+    "battery_status": False,
+}
+_META_SCHEMA_VERSION = 2
 
 
 def _write_json_atomic(path: Path, payload: Dict[str, Any]) -> None:
@@ -157,13 +165,7 @@ def create_session(payload: Dict[str, Any]) -> Dict[str, Any]:
         events_file=str(session_events_path(sid, session_date)),
         point_count=0,
         sensor_event_count=0,
-        sensor_streams={
-            "accelerometer": False,
-            "gyroscope": False,
-            "orientation": False,
-            "visibility_change": False,
-            "battery_status": False,
-        },
+        sensor_streams=dict(_DEFAULT_SENSOR_STREAMS),
         device={
             "user_agent": payload.get("userAgent"),
             "platform_hint": payload.get("platformHint", "android"),
@@ -178,6 +180,7 @@ def create_session(payload: Dict[str, Any]) -> Dict[str, Any]:
             "timeout_ms": int(payload.get("timeoutMs", 10000)),
             "sensor_throttle_ms": int(payload.get("sensorThrottleMs", 200)),
         },
+        meta_schema_version=_META_SCHEMA_VERSION,
     )
 
     write_json(session_meta_path(sid, session_date), meta.to_dict())
@@ -200,18 +203,57 @@ def _ensure_storage_model_defaults(meta: Dict[str, Any]) -> bool:
     return changed
 
 
+def normalize_meta(meta: Dict[str, Any]) -> bool:
+    """Normalize legacy session metadata in-place and report whether any value changed."""
+    changed = _ensure_storage_model_defaults(meta)
+
+    session_id = str(meta.get("session_id", "")).strip()
+    session_date = str(meta.get("session_date") or _today_dir())
+
+    if not meta.get("sensor_events_file_jsonl") and session_id:
+        meta["sensor_events_file_jsonl"] = str(session_sensor_jsonl_path(session_id, session_date))
+        changed = True
+
+    if not meta.get("sensor_events_file_csv") and session_id:
+        meta["sensor_events_file_csv"] = str(session_sensor_csv_path(session_id, session_date))
+        changed = True
+
+    if "sensor_event_count" not in meta:
+        meta["sensor_event_count"] = 0
+        changed = True
+
+    sensor_streams = meta.get("sensor_streams")
+    if not isinstance(sensor_streams, dict):
+        meta["sensor_streams"] = dict(_DEFAULT_SENSOR_STREAMS)
+        changed = True
+    else:
+        normalized_streams = dict(_DEFAULT_SENSOR_STREAMS)
+        for key in _DEFAULT_SENSOR_STREAMS:
+            if key in sensor_streams:
+                normalized_streams[key] = bool(sensor_streams[key])
+        if normalized_streams != sensor_streams:
+            meta["sensor_streams"] = normalized_streams
+            changed = True
+
+    if meta.get("meta_schema_version") != _META_SCHEMA_VERSION:
+        meta["meta_schema_version"] = _META_SCHEMA_VERSION
+        changed = True
+
+    return changed
+
+
 def load_session_meta(session_id: str, session_date: Optional[str] = None) -> Dict[str, Any]:
     path = session_meta_path(session_id, session_date)
     if path.exists():
         meta = read_json(path)
-        if _ensure_storage_model_defaults(meta):
-            save_session_meta(meta)
+        if normalize_meta(meta):
+            _write_json_atomic(path, meta)
         return meta
 
     matches = list(SESSIONS_DIR.glob(f"*/{session_id}/meta.json"))
     if len(matches) == 1:
         meta = read_json(matches[0])
-        if _ensure_storage_model_defaults(meta):
+        if normalize_meta(meta):
             _write_json_atomic(matches[0], meta)
         return meta
 

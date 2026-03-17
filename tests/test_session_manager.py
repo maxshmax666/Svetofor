@@ -7,7 +7,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from app import session_manager as sm
-from app.storage import write_json
+from app.storage import read_json, write_json
 
 
 class SessionManagerFallbackTests(unittest.TestCase):
@@ -179,6 +179,56 @@ class SessionManagerSensorValidationTests(unittest.TestCase):
                             "eventType": "orientation",
                         },
                     )
+
+
+    def test_append_sensor_event_normalizes_legacy_meta_without_keyerror(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            sessions_dir = Path(tmpdir)
+            session_id = "gps-legacy-sensor-meta"
+            today = datetime.utcnow().strftime("%Y-%m-%d")
+            session_root = sessions_dir / today / session_id
+            session_root.mkdir(parents=True, exist_ok=True)
+
+            legacy_meta = {
+                "session_id": session_id,
+                "created_at": "2026-01-01T10:00:00Z",
+                "closed_at": None,
+                "status": "active",
+                "session_date": today,
+                "points_file_jsonl": str(session_root / "points.jsonl"),
+                "points_file_csv": str(session_root / "points.csv"),
+                "events_file": str(session_root / "events.log"),
+                "point_count": 0,
+                "device": {"user_agent": "pytest", "platform_hint": "android"},
+                "client": {"timezone": "UTC", "language": "ru-RU"},
+                "sampling": {
+                    "enable_high_accuracy": True,
+                    "maximum_age_ms": 0,
+                    "timeout_ms": 10000,
+                    "sensor_throttle_ms": 200,
+                },
+            }
+            write_json(session_root / "meta.json", legacy_meta)
+
+            with patch.object(sm, "SESSIONS_DIR", sessions_dir):
+                updated_meta, event = sm.append_sensor_event(
+                    session_id,
+                    {
+                        "eventType": "orientation",
+                        "alpha": 1.0,
+                    },
+                )
+
+            self.assertEqual(updated_meta["sensor_event_count"], 1)
+            self.assertEqual(event["event_seq"], 1)
+            self.assertTrue(updated_meta["sensor_streams"]["orientation"])
+            self.assertEqual(updated_meta["meta_schema_version"], 2)
+
+            persisted = read_json(session_root / "meta.json")
+            self.assertIn("sensor_events_file_jsonl", persisted)
+            self.assertIn("sensor_events_file_csv", persisted)
+            self.assertIn("sensor_streams", persisted)
+            self.assertEqual(persisted["meta_schema_version"], 2)
 
     def test_append_sensor_event_accepts_battery_only_payload(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
