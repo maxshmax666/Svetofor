@@ -1,6 +1,7 @@
 from __future__ import annotations
 import json
 import logging
+import math
 import random
 import string
 import threading
@@ -242,6 +243,10 @@ def _coerce_bool(value: Any) -> Optional[bool]:
     return None
 
 
+def _has_sensor_signal(*values: Optional[float]) -> bool:
+    return any(value is not None and math.isfinite(value) for value in values)
+
+
 def append_point(session_id: str, payload: Dict[str, Any]) -> Tuple[Dict[str, Any], Dict[str, Any]]:
     lat = _coerce_float(payload.get("latitude"))
     lon = _coerce_float(payload.get("longitude"))
@@ -319,6 +324,25 @@ def append_sensor_event(session_id: str, payload: Dict[str, Any]) -> Tuple[Dict[
             _warn_seq_anomaly(session_id, events_path, "event_seq", event_seq, file_max_seq)
             event_seq = file_max_seq + 1
 
+        value_x = _coerce_float(payload.get("valueX"))
+        value_y = _coerce_float(payload.get("valueY"))
+        value_z = _coerce_float(payload.get("valueZ"))
+        alpha = _coerce_float(payload.get("alpha"))
+        beta = _coerce_float(payload.get("beta"))
+        gamma = _coerce_float(payload.get("gamma"))
+        heading_deg = _coerce_float(payload.get("headingDeg") or payload.get("heading"))
+        battery_level = _coerce_int(payload.get("batteryLevel"))
+        is_charging = _coerce_bool(payload.get("isCharging"))
+        is_screen_visible = _coerce_bool(payload.get("isScreenVisible"))
+
+        if not (
+            _has_sensor_signal(value_x, value_y, value_z, alpha, beta, gamma, heading_deg)
+            or battery_level is not None
+            or is_charging is not None
+            or is_screen_visible is not None
+        ):
+            raise ValueError("sensor payload is empty")
+
         event = SensorEvent(
             session_id=session_id,
             event_seq=event_seq,
@@ -327,16 +351,16 @@ def append_sensor_event(session_id: str, payload: Dict[str, Any]) -> Tuple[Dict[
             client_iso_time=payload.get("clientIsoTime") or payload.get("isoTime"),
             client_local_time=payload.get("clientLocalTime") or payload.get("localTime"),
             server_received_at=_now_iso(),
-            value_x=_coerce_float(payload.get("valueX")),
-            value_y=_coerce_float(payload.get("valueY")),
-            value_z=_coerce_float(payload.get("valueZ")),
-            alpha=_coerce_float(payload.get("alpha")),
-            beta=_coerce_float(payload.get("beta")),
-            gamma=_coerce_float(payload.get("gamma")),
-            heading_deg=_coerce_float(payload.get("headingDeg") or payload.get("heading")),
-            battery_level=_coerce_int(payload.get("batteryLevel")),
-            is_charging=_coerce_bool(payload.get("isCharging")),
-            is_screen_visible=_coerce_bool(payload.get("isScreenVisible")),
+            value_x=value_x,
+            value_y=value_y,
+            value_z=value_z,
+            alpha=alpha,
+            beta=beta,
+            gamma=gamma,
+            heading_deg=heading_deg,
+            battery_level=battery_level,
+            is_charging=is_charging,
+            is_screen_visible=is_screen_visible,
             sample_source=payload.get("sampleSource") or "browser_sensor",
             user_agent=payload.get("userAgent"),
         )

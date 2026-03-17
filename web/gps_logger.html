@@ -368,6 +368,7 @@
           batteryLevel: payload.batteryLevel,
           isCharging: payload.isCharging,
           isScreenVisible: payload.isScreenVisible,
+          quality: payload.quality,
           sampleSource: payload.sampleSource,
           userAgent: navigator.userAgent
         }),
@@ -383,12 +384,27 @@
       els.lastSensorInfo.textContent =
         `${payload.eventType} | ` +
         `x=${payload.valueX ?? "—"} y=${payload.valueY ?? "—"} z=${payload.valueZ ?? "—"} ` +
-        `a=${payload.alpha ?? "—"} b=${payload.beta ?? "—"} g=${payload.gamma ?? "—"} h=${payload.headingDeg ?? "—"}`;
+        `a=${payload.alpha ?? "—"} b=${payload.beta ?? "—"} g=${payload.gamma ?? "—"} h=${payload.headingDeg ?? "—"}` +
+        ` q=${payload.quality ?? "—"}`;
 
       logLine(`[SENSOR ${data.eventSeq}] ${payload.eventType} | t=${payload.clientLocalTime}`);
     }
 
     async function emitSensorEvent(eventType, fields) {
+      const hasInformativeFields =
+        eventType === "accelerometer"
+          ? [fields.valueX, fields.valueY, fields.valueZ].some((value) => Number.isFinite(value))
+          : eventType === "gyroscope"
+            ? [fields.valueX, fields.valueY, fields.valueZ].some((value) => Number.isFinite(value))
+            : eventType === "orientation"
+              ? [fields.alpha, fields.beta, fields.gamma, fields.headingDeg].some((value) => Number.isFinite(value))
+              : true;
+
+      if (!hasInformativeFields) {
+        logLine(`[SENSOR DROP] ${eventType} | quality=empty | reason=no-informative-fields`);
+        return;
+      }
+
       const now = Date.now();
       const battery = await getBatteryLevel();
 
@@ -404,6 +420,7 @@
         beta: fields.beta ?? null,
         gamma: fields.gamma ?? null,
         headingDeg: fields.headingDeg ?? null,
+        quality: hasInformativeFields ? "valid" : "empty",
         batteryLevel: battery.batteryLevel,
         isCharging: battery.isCharging,
         isScreenVisible: document.visibilityState === "visible",
@@ -457,10 +474,13 @@
         lastAccelAt = now;
         try {
           const acc = ev.accelerationIncludingGravity || ev.acceleration || {};
+          const x = Number.isFinite(acc.x) ? acc.x : null;
+          const y = Number.isFinite(acc.y) ? acc.y : null;
+          const z = Number.isFinite(acc.z) ? acc.z : null;
           await emitSensorEvent("accelerometer", {
-            valueX: acc.x ?? null,
-            valueY: acc.y ?? null,
-            valueZ: acc.z ?? null,
+            valueX: x,
+            valueY: y,
+            valueZ: z,
             sampleSource: "devicemotion_acceleration"
           });
         } catch (e) {
@@ -472,10 +492,13 @@
         lastGyroAt = now;
         try {
           const rr = ev.rotationRate || {};
+          const alpha = Number.isFinite(rr.alpha) ? rr.alpha : null;
+          const beta = Number.isFinite(rr.beta) ? rr.beta : null;
+          const gamma = Number.isFinite(rr.gamma) ? rr.gamma : null;
           await emitSensorEvent("gyroscope", {
-            valueX: rr.alpha ?? null,
-            valueY: rr.beta ?? null,
-            valueZ: rr.gamma ?? null,
+            valueX: alpha,
+            valueY: beta,
+            valueZ: gamma,
             sampleSource: "devicemotion_rotation"
           });
         } catch (e) {
@@ -492,14 +515,17 @@
 
       try {
         const headingDeg =
-          typeof ev.webkitCompassHeading === "number"
+          Number.isFinite(ev.webkitCompassHeading)
             ? ev.webkitCompassHeading
             : null;
+        const alpha = Number.isFinite(ev.alpha) ? ev.alpha : null;
+        const beta = Number.isFinite(ev.beta) ? ev.beta : null;
+        const gamma = Number.isFinite(ev.gamma) ? ev.gamma : null;
 
         await emitSensorEvent("orientation", {
-          alpha: ev.alpha ?? null,
-          beta: ev.beta ?? null,
-          gamma: ev.gamma ?? null,
+          alpha,
+          beta,
+          gamma,
           headingDeg,
           sampleSource: "deviceorientation"
         });
