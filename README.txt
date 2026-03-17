@@ -8,6 +8,7 @@ GPS LOGGER RAW MODE
 
 Проверка:
   ~/gps-logger/scripts/healthcheck.sh
+  (проверяет http://127.0.0.1:18080/health)
 
 Список сессий:
   ~/gps-logger/scripts/list_sessions.sh
@@ -19,4 +20,4 @@ Tail по сессии:
   ~/gps-logger/scripts/export_session.sh <session_id>
 
 Открыть в браузере:
-  http://127.0.0.1:8080
+  http://127.0.0.1:18080
