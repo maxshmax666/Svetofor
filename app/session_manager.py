@@ -23,8 +23,8 @@ from app.storage import (
     write_json,
     read_json,
     append_jsonl,
-    append_csv_row,
     append_text_line,
+    rewrite_csv_from_jsonl,
 )
 
 
@@ -152,6 +152,8 @@ def create_session(payload: Dict[str, Any]) -> Dict[str, Any]:
         points_file_csv=str(session_csv_path(sid, session_date)),
         sensor_events_file_jsonl=str(session_sensor_jsonl_path(sid, session_date)),
         sensor_events_file_csv=str(session_sensor_csv_path(sid, session_date)),
+        csv_materialized=False,
+        csv_last_exported_at=None,
         events_file=str(session_events_path(sid, session_date)),
         point_count=0,
         sensor_event_count=0,
@@ -184,14 +186,34 @@ def create_session(payload: Dict[str, Any]) -> Dict[str, Any]:
     return meta.to_dict()
 
 
+def _ensure_storage_model_defaults(meta: Dict[str, Any]) -> bool:
+    """Backfill storage-model fields for backward-compatible meta.json payloads."""
+    changed = False
+    if "csv_materialized" not in meta:
+        points_csv_exists = Path(meta.get("points_file_csv", "")).exists()
+        sensor_csv_exists = Path(meta.get("sensor_events_file_csv", "")).exists()
+        meta["csv_materialized"] = points_csv_exists or sensor_csv_exists
+        changed = True
+    if "csv_last_exported_at" not in meta:
+        meta["csv_last_exported_at"] = None
+        changed = True
+    return changed
+
+
 def load_session_meta(session_id: str, session_date: Optional[str] = None) -> Dict[str, Any]:
     path = session_meta_path(session_id, session_date)
     if path.exists():
-        return read_json(path)
+        meta = read_json(path)
+        if _ensure_storage_model_defaults(meta):
+            save_session_meta(meta)
+        return meta
 
     matches = list(SESSIONS_DIR.glob(f"*/{session_id}/meta.json"))
     if len(matches) == 1:
-        return read_json(matches[0])
+        meta = read_json(matches[0])
+        if _ensure_storage_model_defaults(meta):
+            _write_json_atomic(matches[0], meta)
+        return meta
 
     if len(matches) > 1:
         error_message = (
@@ -264,7 +286,6 @@ def append_point(session_id: str, payload: Dict[str, Any]) -> Tuple[Dict[str, An
             raise ValueError(f"Session {session_id} is not active")
 
         jsonl_path = Path(meta["points_file_jsonl"])
-        csv_path = Path(meta["points_file_csv"])
         events_path = Path(meta["events_file"])
 
         point_seq = int(meta.get("point_count", 0)) + 1
@@ -296,8 +317,6 @@ def append_point(session_id: str, payload: Dict[str, Any]) -> Tuple[Dict[str, An
         )
 
         append_jsonl(jsonl_path, point.to_dict())
-        append_csv_row(csv_path, CSV_HEADER, point.to_dict())
-        append_text_line(events_path, f"{_now_iso()} point_appended seq={point_seq}")
 
         meta["point_count"] = point_seq
         save_session_meta(meta)
@@ -315,7 +334,6 @@ def append_sensor_event(session_id: str, payload: Dict[str, Any]) -> Tuple[Dict[
             raise ValueError(f"Session {session_id} is not active")
 
         jsonl_path = Path(meta["sensor_events_file_jsonl"])
-        csv_path = Path(meta["sensor_events_file_csv"])
         events_path = Path(meta["events_file"])
 
         event_seq = int(meta.get("sensor_event_count", 0)) + 1
@@ -366,8 +384,6 @@ def append_sensor_event(session_id: str, payload: Dict[str, Any]) -> Tuple[Dict[
         )
 
         append_jsonl(jsonl_path, event.to_dict())
-        append_csv_row(csv_path, SENSOR_CSV_HEADER, event.to_dict())
-        append_text_line(events_path, f"{_now_iso()} sensor_event_appended seq={event_seq} type={event_type}")
 
         meta["sensor_event_count"] = event_seq
         streams = meta.get("sensor_streams") or {}
@@ -377,6 +393,33 @@ def append_sensor_event(session_id: str, payload: Dict[str, Any]) -> Tuple[Dict[
 
         save_session_meta(meta)
         return meta, event.to_dict()
+
+
+def materialize_session_csv(session_id: str) -> Dict[str, Any]:
+    """Build CSV snapshots from JSONL source-of-truth files for a session."""
+    with _session_lock(session_id):
+        meta = load_session_meta(session_id)
+
+        points_jsonl = Path(meta["points_file_jsonl"])
+        points_csv = Path(meta["points_file_csv"])
+        sensor_jsonl = Path(meta["sensor_events_file_jsonl"])
+        sensor_csv = Path(meta["sensor_events_file_csv"])
+
+        ensure_dir(points_csv.parent)
+        points_rows = rewrite_csv_from_jsonl(points_jsonl, points_csv, CSV_HEADER)
+        sensor_rows = rewrite_csv_from_jsonl(sensor_jsonl, sensor_csv, SENSOR_CSV_HEADER)
+
+        exported_at = _now_iso()
+        meta["csv_materialized"] = True
+        meta["csv_last_exported_at"] = exported_at
+        save_session_meta(meta)
+
+        append_text_line(
+            Path(meta["events_file"]),
+            f"{exported_at} csv_materialized points_rows={points_rows} sensor_rows={sensor_rows}",
+        )
+
+        return meta
 
 
 def stop_session(session_id: str) -> Dict[str, Any]:
@@ -404,7 +447,8 @@ def mark_interrupted_sessions() -> int:
 
         if meta.get("status") == "active":
             meta["status"] = "interrupted"
-            write_json(meta_path, meta)
+            _ensure_storage_model_defaults(meta)
+            _write_json_atomic(meta_path, meta)
             append_text_line(meta_path.parent / "events.log", f"{_now_iso()} session_interrupted {meta.get('session_id')}")
             changed += 1
 

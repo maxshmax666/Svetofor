@@ -14,6 +14,8 @@ class SessionMeta:
     points_file_csv: str
     sensor_events_file_jsonl: str
     sensor_events_file_csv: str
+    csv_materialized: bool
+    csv_last_exported_at: Optional[str]
     events_file: str
     point_count: int
     sensor_event_count: int
