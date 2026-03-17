@@ -1,0 +1,647 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>GPS логгер курьера</title>
+  <style>
+    :root {
+      --bg:#0f1115;
+      --panel:#171a21;
+      --panel2:#1d2330;
+      --text:#e8edf2;
+      --muted:#96a0ad;
+      --ok:#2ecc71;
+      --warn:#f39c12;
+      --bad:#e74c3c;
+      --btn:#2b3445;
+      --btn-hover:#35425a;
+      --border:#2c3442;
+      --primary:#1f6feb;
+      --primary-hover:#2a7fff;
+    }
+    * { box-sizing:border-box; }
+    body {
+      margin:0;
+      background:var(--bg);
+      color:var(--text);
+      font-family:system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
+      line-height:1.4;
+    }
+    .wrap {
+      max-width:1080px;
+      margin:0 auto;
+      padding:16px;
+    }
+    h1 { margin:0 0 12px; font-size:24px; }
+    .sub { color:var(--muted); margin-bottom:16px; font-size:14px; }
+    .panel {
+      background:var(--panel);
+      border:1px solid var(--border);
+      border-radius:14px;
+      padding:14px;
+      margin-bottom:14px;
+    }
+    .controls {
+      display:flex;
+      flex-wrap:wrap;
+      gap:10px;
+      margin-bottom:14px;
+    }
+    button, a.btn {
+      border:0;
+      border-radius:12px;
+      padding:12px 14px;
+      background:var(--btn);
+      color:var(--text);
+      font-size:15px;
+      cursor:pointer;
+      min-height:46px;
+      text-decoration:none;
+      display:inline-flex;
+      align-items:center;
+      justify-content:center;
+    }
+    button:hover, a.btn:hover { background:var(--btn-hover); }
+    .primary { background:var(--primary) !important; }
+    .primary:hover { background:var(--primary-hover) !important; }
+    .good { background:#1f8f50 !important; }
+    .good:hover { background:#23a55b !important; }
+    .warn { background:#b9770e !important; }
+    .warn:hover { background:#d48d0f !important; }
+
+    .grid {
+      display:grid;
+      grid-template-columns:repeat(2,minmax(0,1fr));
+      gap:10px;
+    }
+    @media (max-width:760px) {
+      .grid { grid-template-columns:1fr; }
+    }
+
+    .kv {
+      background:var(--panel2);
+      border-radius:12px;
+      padding:10px 12px;
+      border:1px solid var(--border);
+    }
+    .kv .k {
+      color:var(--muted);
+      font-size:12px;
+      margin-bottom:4px;
+    }
+    .kv .v {
+      font-size:15px;
+      word-break:break-word;
+    }
+
+    .status-ok { color:var(--ok); }
+    .status-warn { color:var(--warn); }
+    .status-bad { color:var(--bad); }
+
+    .logbox {
+      background:#0b0d11;
+      border:1px solid var(--border);
+      border-radius:12px;
+      padding:10px;
+      max-height:360px;
+      overflow:auto;
+      font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+      font-size:12px;
+      white-space:pre-wrap;
+    }
+
+    .small { color:var(--muted); font-size:12px; }
+    .mono { font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <h1>GPS логгер курьера</h1>
+    <div class="sub">
+      RAW-режим: GPS + sensor events. Пишем сырые точки и сырые датчики без объединения и без фильтрации.
+    </div>
+
+    <div class="panel">
+      <div class="controls">
+        <button class="primary" id="startBtn">Старт сессии</button>
+        <button class="warn" id="stopBtn">Стоп сессии</button>
+        <a class="btn good" id="exportBtn" href="#" target="_blank">Экспорт сессии</a>
+      </div>
+
+      <div class="grid">
+        <div class="kv"><div class="k">Статус</div><div class="v" id="status">Ожидание</div></div>
+        <div class="kv"><div class="k">Session ID</div><div class="v mono" id="sessionId">—</div></div>
+        <div class="kv"><div class="k">GPS точек</div><div class="v" id="sentCount">0</div></div>
+        <div class="kv"><div class="k">Sensor events</div><div class="v" id="sensorCount">0</div></div>
+        <div class="kv"><div class="k">Последнее client time</div><div class="v" id="lastClientTime">—</div></div>
+        <div class="kv"><div class="k">Последнее server time</div><div class="v" id="lastServerTime">—</div></div>
+        <div class="kv"><div class="k">Последняя координата</div><div class="v mono" id="lastCoord">—</div></div>
+        <div class="kv"><div class="k">Accuracy / Speed / Heading</div><div class="v" id="lastQuality">—</div></div>
+        <div class="kv"><div class="k">Последний sensor event</div><div class="v" id="lastSensorInfo">—</div></div>
+        <div class="kv"><div class="k">Raw position timestamp</div><div class="v mono" id="lastRawTimestamp">—</div></div>
+      </div>
+    </div>
+
+    <div class="panel">
+      <div class="small" style="margin-bottom:8px;">
+        Последние события:
+      </div>
+      <div class="logbox" id="logView">Пока пусто.</div>
+    </div>
+  </div>
+
+  <script>
+    let watchId = null;
+    let sessionId = null;
+    let sentCount = 0;
+    let sensorCount = 0;
+    let wakeLock = null;
+    let batteryRef = null;
+
+    const SENSOR_THROTTLE_MS = 200;
+    let lastAccelAt = 0;
+    let lastGyroAt = 0;
+    let lastOrientAt = 0;
+    let lastBatteryAt = 0;
+
+    const els = {
+      status: document.getElementById("status"),
+      sessionId: document.getElementById("sessionId"),
+      sentCount: document.getElementById("sentCount"),
+      sensorCount: document.getElementById("sensorCount"),
+      lastClientTime: document.getElementById("lastClientTime"),
+      lastServerTime: document.getElementById("lastServerTime"),
+      lastCoord: document.getElementById("lastCoord"),
+      lastQuality: document.getElementById("lastQuality"),
+      lastSensorInfo: document.getElementById("lastSensorInfo"),
+      lastRawTimestamp: document.getElementById("lastRawTimestamp"),
+      logView: document.getElementById("logView"),
+      startBtn: document.getElementById("startBtn"),
+      stopBtn: document.getElementById("stopBtn"),
+      exportBtn: document.getElementById("exportBtn"),
+    };
+
+    function setStatus(text, type="ok") {
+      const cls = type === "ok" ? "status-ok" : type === "warn" ? "status-warn" : "status-bad";
+      els.status.className = cls;
+      els.status.textContent = text;
+    }
+
+    function logLine(text) {
+      const lines = els.logView.textContent ? els.logView.textContent.split("\n") : [];
+      lines.unshift(text);
+      els.logView.textContent = lines.slice(0, 150).join("\n");
+    }
+
+    function formatLocal(ms) {
+      return new Date(ms).toLocaleString("ru-RU", {
+        year:"numeric",
+        month:"2-digit",
+        day:"2-digit",
+        hour:"2-digit",
+        minute:"2-digit",
+        second:"2-digit"
+      });
+    }
+
+    async function getBatteryLevel() {
+      try {
+        if (!navigator.getBattery) return { batteryLevel: null, isCharging: null };
+        if (!batteryRef) batteryRef = await navigator.getBattery();
+        return {
+          batteryLevel: Math.round(batteryRef.level * 100),
+          isCharging: !!batteryRef.charging
+        };
+      } catch {
+        return { batteryLevel: null, isCharging: null };
+      }
+    }
+
+    async function requestWakeLock() {
+      try {
+        if ("wakeLock" in navigator) {
+          wakeLock = await navigator.wakeLock.request("screen");
+        }
+      } catch {}
+    }
+
+    function releaseWakeLock() {
+      if (wakeLock && wakeLock.release) {
+        wakeLock.release().catch(() => {});
+        wakeLock = null;
+      }
+    }
+
+    async function ensureIOSPermissions() {
+      try {
+        if (typeof DeviceMotionEvent !== "undefined" && typeof DeviceMotionEvent.requestPermission === "function") {
+          const motion = await DeviceMotionEvent.requestPermission();
+          logLine(`[PERMISSION] DeviceMotion: ${motion}`);
+        }
+      } catch (e) {
+        logLine(`[PERMISSION WARN] DeviceMotion: ${e.message}`);
+      }
+
+      try {
+        if (typeof DeviceOrientationEvent !== "undefined" && typeof DeviceOrientationEvent.requestPermission === "function") {
+          const orient = await DeviceOrientationEvent.requestPermission();
+          logLine(`[PERMISSION] DeviceOrientation: ${orient}`);
+        }
+      } catch (e) {
+        logLine(`[PERMISSION WARN] DeviceOrientation: ${e.message}`);
+      }
+    }
+
+    async function startSession() {
+      if (sessionId) {
+        setStatus("Сессия уже активна", "warn");
+        return;
+      }
+
+      const payload = {
+        userAgent: navigator.userAgent,
+        platformHint: "android",
+        timezone: Intl.DateTimeFormat().resolvedOptions().timeZone || "unknown",
+        language: navigator.language || "unknown",
+        enableHighAccuracy: true,
+        maximumAgeMs: 0,
+        timeoutMs: 10000,
+        sensorThrottleMs: SENSOR_THROTTLE_MS
+      };
+
+      const res = await fetch("/api/session/start", {
+        method: "POST",
+        headers: {"Content-Type":"application/json"},
+        body: JSON.stringify(payload),
+      });
+
+      const data = await res.json();
+      if (!res.ok || !data.ok) {
+        throw new Error(data.error || `HTTP ${res.status}`);
+      }
+
+      sessionId = data.session.session_id;
+      sentCount = 0;
+      sensorCount = 0;
+      els.sessionId.textContent = sessionId;
+      els.sentCount.textContent = "0";
+      els.sensorCount.textContent = "0";
+      els.exportBtn.href = `/api/export/session/${sessionId}.tar.gz`;
+
+      setStatus("Сессия создана, запускаю GPS и датчики...", "ok");
+      logLine(`[SESSION START] ${sessionId}`);
+
+      if (!navigator.geolocation) {
+        throw new Error("Geolocation не поддерживается");
+      }
+
+      await ensureIOSPermissions();
+      await requestWakeLock();
+
+      bindSensorListeners();
+
+      watchId = navigator.geolocation.watchPosition(
+        onPosition,
+        onPositionError,
+        {
+          enableHighAccuracy: true,
+          maximumAge: 0,
+          timeout: 10000
+        }
+      );
+
+      await emitBatteryStatus("battery_status");
+      await emitVisibilityChange();
+    }
+
+    async function stopSession() {
+      if (!sessionId) {
+        setStatus("Нет активной сессии", "warn");
+        return;
+      }
+
+      unbindSensorListeners();
+
+      if (watchId != null) {
+        navigator.geolocation.clearWatch(watchId);
+        watchId = null;
+      }
+      releaseWakeLock();
+
+      const currentSessionId = sessionId;
+      const res = await fetch("/api/session/stop", {
+        method: "POST",
+        headers: {"Content-Type":"application/json"},
+        body: JSON.stringify({ sessionId: currentSessionId }),
+      });
+
+      const data = await res.json();
+      if (!res.ok || !data.ok) {
+        throw new Error(data.error || `HTTP ${res.status}`);
+      }
+
+      logLine(`[SESSION STOP] ${currentSessionId}`);
+      setStatus("Сессия остановлена", "warn");
+      sessionId = null;
+      els.sessionId.textContent = "—";
+    }
+
+    async function postSensorEvent(payload) {
+      if (!sessionId) return;
+      const res = await fetch("/api/sensor-event", {
+        method: "POST",
+        headers: {"Content-Type":"application/json"},
+        body: JSON.stringify({
+          sessionId,
+          clientTimestampMs: payload.clientTimestampMs,
+          clientIsoTime: payload.clientIsoTime,
+          clientLocalTime: payload.clientLocalTime,
+          eventType: payload.eventType,
+          valueX: payload.valueX,
+          valueY: payload.valueY,
+          valueZ: payload.valueZ,
+          alpha: payload.alpha,
+          beta: payload.beta,
+          gamma: payload.gamma,
+          headingDeg: payload.headingDeg,
+          batteryLevel: payload.batteryLevel,
+          isCharging: payload.isCharging,
+          isScreenVisible: payload.isScreenVisible,
+          sampleSource: payload.sampleSource,
+          userAgent: navigator.userAgent
+        }),
+      });
+
+      const data = await res.json();
+      if (!res.ok || !data.ok) {
+        throw new Error(data.error || `HTTP ${res.status}`);
+      }
+
+      sensorCount = data.sensorEventCount ?? (sensorCount + 1);
+      els.sensorCount.textContent = String(sensorCount);
+      els.lastSensorInfo.textContent =
+        `${payload.eventType} | ` +
+        `x=${payload.valueX ?? "—"} y=${payload.valueY ?? "—"} z=${payload.valueZ ?? "—"} ` +
+        `a=${payload.alpha ?? "—"} b=${payload.beta ?? "—"} g=${payload.gamma ?? "—"} h=${payload.headingDeg ?? "—"}`;
+
+      logLine(`[SENSOR ${data.eventSeq}] ${payload.eventType} | t=${payload.clientLocalTime}`);
+    }
+
+    async function emitSensorEvent(eventType, fields) {
+      const now = Date.now();
+      const battery = await getBatteryLevel();
+
+      await postSensorEvent({
+        eventType,
+        clientTimestampMs: now,
+        clientIsoTime: new Date(now).toISOString(),
+        clientLocalTime: formatLocal(now),
+        valueX: fields.valueX ?? null,
+        valueY: fields.valueY ?? null,
+        valueZ: fields.valueZ ?? null,
+        alpha: fields.alpha ?? null,
+        beta: fields.beta ?? null,
+        gamma: fields.gamma ?? null,
+        headingDeg: fields.headingDeg ?? null,
+        batteryLevel: battery.batteryLevel,
+        isCharging: battery.isCharging,
+        isScreenVisible: document.visibilityState === "visible",
+        sampleSource: fields.sampleSource ?? "browser_sensor"
+      });
+    }
+
+    async function emitVisibilityChange() {
+      try {
+        await emitSensorEvent("visibility_change", {
+          sampleSource: "visibilitychange"
+        });
+      } catch (e) {
+        logLine(`[SENSOR ERR] visibility_change | ${e.message}`);
+      }
+    }
+
+    async function emitBatteryStatus(eventType="battery_status") {
+      try {
+        const now = Date.now();
+        if (now - lastBatteryAt < 1000) return;
+        lastBatteryAt = now;
+
+        const battery = await getBatteryLevel();
+        await postSensorEvent({
+          eventType,
+          clientTimestampMs: now,
+          clientIsoTime: new Date(now).toISOString(),
+          clientLocalTime: formatLocal(now),
+          valueX: null,
+          valueY: null,
+          valueZ: null,
+          alpha: null,
+          beta: null,
+          gamma: null,
+          headingDeg: null,
+          batteryLevel: battery.batteryLevel,
+          isCharging: battery.isCharging,
+          isScreenVisible: document.visibilityState === "visible",
+          sampleSource: "battery"
+        });
+      } catch (e) {
+        logLine(`[SENSOR ERR] battery_status | ${e.message}`);
+      }
+    }
+
+    async function onDeviceMotion(ev) {
+      if (!sessionId) return;
+      const now = Date.now();
+      if (now - lastAccelAt >= SENSOR_THROTTLE_MS) {
+        lastAccelAt = now;
+        try {
+          const acc = ev.accelerationIncludingGravity || ev.acceleration || {};
+          await emitSensorEvent("accelerometer", {
+            valueX: acc.x ?? null,
+            valueY: acc.y ?? null,
+            valueZ: acc.z ?? null,
+            sampleSource: "devicemotion_acceleration"
+          });
+        } catch (e) {
+          logLine(`[SENSOR ERR] accelerometer | ${e.message}`);
+        }
+      }
+
+      if (now - lastGyroAt >= SENSOR_THROTTLE_MS) {
+        lastGyroAt = now;
+        try {
+          const rr = ev.rotationRate || {};
+          await emitSensorEvent("gyroscope", {
+            valueX: rr.alpha ?? null,
+            valueY: rr.beta ?? null,
+            valueZ: rr.gamma ?? null,
+            sampleSource: "devicemotion_rotation"
+          });
+        } catch (e) {
+          logLine(`[SENSOR ERR] gyroscope | ${e.message}`);
+        }
+      }
+    }
+
+    async function onDeviceOrientation(ev) {
+      if (!sessionId) return;
+      const now = Date.now();
+      if (now - lastOrientAt < SENSOR_THROTTLE_MS) return;
+      lastOrientAt = now;
+
+      try {
+        const headingDeg =
+          typeof ev.webkitCompassHeading === "number"
+            ? ev.webkitCompassHeading
+            : null;
+
+        await emitSensorEvent("orientation", {
+          alpha: ev.alpha ?? null,
+          beta: ev.beta ?? null,
+          gamma: ev.gamma ?? null,
+          headingDeg,
+          sampleSource: "deviceorientation"
+        });
+      } catch (e) {
+        logLine(`[SENSOR ERR] orientation | ${e.message}`);
+      }
+    }
+
+    function bindSensorListeners() {
+      window.addEventListener("devicemotion", onDeviceMotion);
+      window.addEventListener("deviceorientation", onDeviceOrientation);
+      document.addEventListener("visibilitychange", handleVisibilityChange);
+
+      if (batteryRef) {
+        batteryRef.addEventListener?.("chargingchange", handleBatteryChange);
+        batteryRef.addEventListener?.("levelchange", handleBatteryChange);
+      } else if (navigator.getBattery) {
+        navigator.getBattery().then((b) => {
+          batteryRef = b;
+          batteryRef.addEventListener?.("chargingchange", handleBatteryChange);
+          batteryRef.addEventListener?.("levelchange", handleBatteryChange);
+        }).catch(() => {});
+      }
+    }
+
+    function unbindSensorListeners() {
+      window.removeEventListener("devicemotion", onDeviceMotion);
+      window.removeEventListener("deviceorientation", onDeviceOrientation);
+      document.removeEventListener("visibilitychange", handleVisibilityChange);
+
+      if (batteryRef) {
+        batteryRef.removeEventListener?.("chargingchange", handleBatteryChange);
+        batteryRef.removeEventListener?.("levelchange", handleBatteryChange);
+      }
+    }
+
+    function handleVisibilityChange() {
+      emitVisibilityChange().catch((e) => {
+        logLine(`[SENSOR ERR] visibility_change | ${e.message}`);
+      });
+    }
+
+    function handleBatteryChange() {
+      emitBatteryStatus("battery_status").catch((e) => {
+        logLine(`[SENSOR ERR] battery_status | ${e.message}`);
+      });
+    }
+
+    async function onPosition(pos) {
+      if (!sessionId) return;
+
+      try {
+        const now = Date.now();
+        const coords = pos.coords;
+        const battery = await getBatteryLevel();
+
+        const payload = {
+          sessionId,
+          clientTimestampMs: now,
+          clientIsoTime: new Date(now).toISOString(),
+          clientLocalTime: formatLocal(now),
+          latitude: coords.latitude,
+          longitude: coords.longitude,
+          accuracyM: coords.accuracy ?? null,
+          altitudeM: coords.altitude ?? null,
+          altitudeAccuracyM: coords.altitudeAccuracy ?? null,
+          headingDeg: coords.heading ?? null,
+          speedMps: coords.speed ?? null,
+          speedKmh: coords.speed != null ? +(coords.speed * 3.6).toFixed(3) : null,
+          batteryLevel: battery.batteryLevel,
+          isScreenVisible: document.visibilityState === "visible",
+          sampleSource: "browser_geolocation",
+          rawPositionTimestampMs: typeof pos.timestamp === "number" ? Math.round(pos.timestamp) : null,
+          userAgent: navigator.userAgent
+        };
+
+        const res = await fetch("/api/point", {
+          method: "POST",
+          headers: {"Content-Type":"application/json"},
+          body: JSON.stringify(payload),
+        });
+
+        const data = await res.json();
+        if (!res.ok || !data.ok) {
+          throw new Error(data.error || `HTTP ${res.status}`);
+        }
+
+        sentCount = data.pointCount ?? (sentCount + 1);
+        els.sentCount.textContent = String(sentCount);
+        els.lastClientTime.textContent = `${payload.clientLocalTime} | ${payload.clientIsoTime}`;
+        els.lastServerTime.textContent = new Date().toISOString();
+        els.lastCoord.textContent = `${Number(payload.latitude).toFixed(6)}, ${Number(payload.longitude).toFixed(6)}`;
+        els.lastQuality.textContent =
+          `acc=${payload.accuracyM ?? "—"}м | speed=${payload.speedMps ?? "—"} м/с | heading=${payload.headingDeg ?? "—"}°`;
+        els.lastRawTimestamp.textContent = String(payload.rawPositionTimestampMs ?? "—");
+
+        setStatus("RAW GPS точка сохранена", "ok");
+        logLine(
+          `[POINT ${data.pointSeq}] ${payload.clientLocalTime} | ` +
+          `${Number(payload.latitude).toFixed(6)}, ${Number(payload.longitude).toFixed(6)} | ` +
+          `acc=${payload.accuracyM ?? "—"} | speed=${payload.speedMps ?? "—"} | heading=${payload.headingDeg ?? "—"}`
+        );
+      } catch (e) {
+        setStatus(`Ошибка отправки GPS точки: ${e.message}`, "bad");
+        logLine(`[GPS ERR] ${new Date().toLocaleTimeString("ru-RU")} | ${e.message}`);
+      }
+    }
+
+    function onPositionError(err) {
+      setStatus(`GPS ошибка: ${err.code} ${err.message}`, "bad");
+      logLine(`[GPS ERR] ${err.code} ${err.message}`);
+    }
+
+    document.addEventListener("visibilitychange", async () => {
+      if (document.visibilityState === "visible" && watchId != null) {
+        await requestWakeLock();
+      }
+    });
+
+    window.addEventListener("beforeunload", async () => {
+      if (!sessionId) return;
+      try {
+        navigator.sendBeacon(
+          "/api/session/stop",
+          new Blob([JSON.stringify({ sessionId })], { type: "application/json" })
+        );
+      } catch {}
+    });
+
+    els.startBtn.addEventListener("click", () => {
+      startSession().catch((e) => {
+        setStatus(`Ошибка старта: ${e.message}`, "bad");
+        logLine(`[START ERR] ${e.message}`);
+      });
+    });
+
+    els.stopBtn.addEventListener("click", () => {
+      stopSession().catch((e) => {
+        setStatus(`Ошибка остановки: ${e.message}`, "bad");
+        logLine(`[STOP ERR] ${e.message}`);
+      });
+    });
+  </script>
+</body>
+</html>

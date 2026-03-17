@@ -1,0 +1,14 @@
+
+<script>
+function getDriverId(){
+    let id = localStorage.getItem("driver_id");
+    if(!id){
+        id = prompt("Введите имя курьера");
+        if(id){
+            localStorage.setItem("driver_id",id);
+        }
+    }
+    return id;
+}
+</script>
+
