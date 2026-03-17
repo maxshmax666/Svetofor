@@ -1,0 +1,11 @@
+2026-03-17T09:50:32Z session_started gps-20260317-095032-e8u8
+2026-03-17T09:50:32Z sensor_event_appended seq=1 type=battery_status
+2026-03-17T09:50:32Z sensor_event_appended seq=2 type=accelerometer
+2026-03-17T09:50:32Z sensor_event_appended seq=3 type=orientation
+2026-03-17T09:50:32Z sensor_event_appended seq=4 type=visibility_change
+2026-03-17T09:50:32Z sensor_event_appended seq=5 type=gyroscope
+2026-03-17T09:50:34Z point_appended seq=1
+2026-03-17T09:50:39Z point_appended seq=2
+2026-03-17T09:50:45Z point_appended seq=3
+2026-03-17T09:50:51Z point_appended seq=4
+2026-03-17T09:50:55Z session_closed gps-20260317-095032-e8u8

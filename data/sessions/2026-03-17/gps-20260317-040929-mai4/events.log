@@ -1,0 +1,14 @@
+2026-03-17T04:09:29Z session_started gps-20260317-040929-mai4
+2026-03-17T04:09:29Z sensor_event_appended seq=1 type=orientation
+2026-03-17T04:09:29Z sensor_event_appended seq=1 type=battery_status
+2026-03-17T04:09:29Z sensor_event_appended seq=2 type=accelerometer
+2026-03-17T04:09:29Z sensor_event_appended seq=2 type=visibility_change
+2026-03-17T04:09:29Z sensor_event_appended seq=2 type=gyroscope
+2026-03-17T04:09:49Z point_appended seq=1
+2026-03-17T04:09:55Z point_appended seq=2
+2026-03-17T04:10:01Z point_appended seq=3
+2026-03-17T04:10:06Z point_appended seq=4
+2026-03-17T04:10:13Z point_appended seq=5
+2026-03-17T04:10:19Z point_appended seq=6
+2026-03-17T04:10:24Z sensor_event_appended seq=3 type=battery_status
+2026-03-17T04:10:24Z session_closed gps-20260317-040929-mai4

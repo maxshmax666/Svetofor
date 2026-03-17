@@ -1,0 +1,4 @@
+2026-03-17T04:38:10Z session_started gps-20260317-043810-pohu
+2026-03-17T04:38:10Z sensor_event_appended seq=1 type=battery_status
+2026-03-17T04:38:10Z sensor_event_appended seq=2 type=accelerometer
+2026-03-17T09:29:43Z session_interrupted gps-20260317-043810-pohu

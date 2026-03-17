@@ -1,0 +1,3 @@
+session_id,event_seq,event_type,client_timestamp_ms,client_iso_time,client_local_time,server_received_at,value_x,value_y,value_z,alpha,beta,gamma,heading_deg,battery_level,is_charging,is_screen_visible,sample_source,user_agent
+gps-20260311-094735-lonb,1,battery_status,1773222453806,2026-03-11T09:47:33.806Z,"11.03.2026, 14:47:33",2026-03-11T09:47:35Z,,,,,,,,,,True,battery,"Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/145.0.0.0 Mobile Safari/537.36"
+gps-20260311-094735-lonb,2,visibility_change,1773222454063,2026-03-11T09:47:34.063Z,"11.03.2026, 14:47:34",2026-03-11T09:47:35Z,,,,,,,,,,True,visibilitychange,"Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/145.0.0.0 Mobile Safari/537.36"

@@ -1,0 +1,5 @@
+2026-03-17T04:38:10Z session_started gps-20260317-043810-6s5o
+2026-03-17T04:38:10Z sensor_event_appended seq=1 type=visibility_change
+2026-03-17T04:38:22Z sensor_event_appended seq=2 type=gyroscope
+2026-03-17T04:38:22Z sensor_event_appended seq=3 type=visibility_change
+2026-03-17T04:38:30Z session_closed gps-20260317-043810-6s5o

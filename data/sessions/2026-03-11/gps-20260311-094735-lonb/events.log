@@ -1,0 +1,4 @@
+2026-03-11T09:47:35Z session_started gps-20260311-094735-lonb
+2026-03-11T09:47:35Z sensor_event_appended seq=1 type=battery_status
+2026-03-11T09:47:35Z sensor_event_appended seq=2 type=visibility_change
+2026-03-11T09:47:45Z session_closed gps-20260311-094735-lonb

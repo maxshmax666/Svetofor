@@ -1,0 +1,35 @@
+{
+  "session_id": "gps-20260317-095032-e8u8",
+  "created_at": "2026-03-17T09:50:32Z",
+  "closed_at": "2026-03-17T09:50:55Z",
+  "status": "closed",
+  "session_date": "2026-03-17",
+  "points_file_jsonl": "/opt/gps-logger/data/sessions/2026-03-17/gps-20260317-095032-e8u8/points.jsonl",
+  "points_file_csv": "/opt/gps-logger/data/sessions/2026-03-17/gps-20260317-095032-e8u8/points.csv",
+  "sensor_events_file_jsonl": "/opt/gps-logger/data/sessions/2026-03-17/gps-20260317-095032-e8u8/sensor_events.jsonl",
+  "sensor_events_file_csv": "/opt/gps-logger/data/sessions/2026-03-17/gps-20260317-095032-e8u8/sensor_events.csv",
+  "events_file": "/opt/gps-logger/data/sessions/2026-03-17/gps-20260317-095032-e8u8/events.log",
+  "point_count": 4,
+  "sensor_event_count": 5,
+  "sensor_streams": {
+    "accelerometer": true,
+    "gyroscope": true,
+    "orientation": true,
+    "visibility_change": true,
+    "battery_status": true
+  },
+  "device": {
+    "user_agent": "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/146.0.0.0 Mobile Safari/537.36",
+    "platform_hint": "android"
+  },
+  "client": {
+    "timezone": "Asia/Yekaterinburg",
+    "language": "ru-RU"
+  },
+  "sampling": {
+    "enable_high_accuracy": true,
+    "maximum_age_ms": 0,
+    "timeout_ms": 10000,
+    "sensor_throttle_ms": 200
+  }
+}

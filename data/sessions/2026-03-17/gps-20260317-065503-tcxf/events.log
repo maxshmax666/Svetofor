@@ -1,0 +1,40 @@
+2026-03-17T06:55:03Z session_started gps-20260317-065503-tcxf
+2026-03-17T06:55:03Z sensor_event_appended seq=1 type=accelerometer
+2026-03-17T06:55:03Z sensor_event_appended seq=2 type=battery_status
+2026-03-17T06:55:03Z sensor_event_appended seq=3 type=orientation
+2026-03-17T06:55:04Z sensor_event_appended seq=4 type=visibility_change
+2026-03-17T06:55:04Z sensor_event_appended seq=4 type=gyroscope
+2026-03-17T06:55:05Z point_appended seq=1
+2026-03-17T06:55:10Z point_appended seq=2
+2026-03-17T06:55:15Z point_appended seq=3
+2026-03-17T06:55:20Z point_appended seq=4
+2026-03-17T06:55:25Z point_appended seq=5
+2026-03-17T06:55:31Z point_appended seq=6
+2026-03-17T06:55:34Z point_appended seq=7
+2026-03-17T06:55:34Z point_appended seq=8
+2026-03-17T06:55:35Z point_appended seq=9
+2026-03-17T06:55:36Z point_appended seq=10
+2026-03-17T06:55:37Z point_appended seq=11
+2026-03-17T06:55:38Z point_appended seq=12
+2026-03-17T06:55:39Z point_appended seq=13
+2026-03-17T06:55:40Z point_appended seq=14
+2026-03-17T06:55:41Z point_appended seq=15
+2026-03-17T06:55:42Z point_appended seq=16
+2026-03-17T06:55:43Z point_appended seq=17
+2026-03-17T06:55:44Z point_appended seq=18
+2026-03-17T06:55:45Z point_appended seq=19
+2026-03-17T06:55:46Z point_appended seq=20
+2026-03-17T06:55:47Z point_appended seq=21
+2026-03-17T06:55:48Z point_appended seq=22
+2026-03-17T06:55:49Z point_appended seq=23
+2026-03-17T06:55:50Z point_appended seq=24
+2026-03-17T06:55:51Z point_appended seq=25
+2026-03-17T06:55:53Z sensor_event_appended seq=5 type=visibility_change
+2026-03-17T07:14:21Z point_appended seq=26
+2026-03-17T07:14:21Z sensor_event_appended seq=6 type=orientation
+2026-03-17T07:14:21Z sensor_event_appended seq=7 type=visibility_change
+2026-03-17T07:14:21Z sensor_event_appended seq=8 type=battery_status
+2026-03-17T07:14:21Z sensor_event_appended seq=9 type=accelerometer
+2026-03-17T07:14:21Z sensor_event_appended seq=10 type=gyroscope
+2026-03-17T07:14:25Z point_appended seq=27
+2026-03-17T07:14:28Z session_closed gps-20260317-065503-tcxf
