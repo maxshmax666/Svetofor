@@ -14,6 +14,7 @@ from app.config import (
 from app.export_session import export_session_archive
 from app.session_manager import (
     append_point,
+    append_point_comment,
     append_sensor_event,
     create_session,
     load_session_meta,
@@ -111,6 +112,27 @@ def api_sensor_event():
             "eventSeq": event["event_seq"],
             "sensorEventCount": meta["sensor_event_count"],
             "eventType": event["event_type"],
+        })
+    except FileNotFoundError as e:
+        return jsonify({"ok": False, "error": str(e)}), 404
+    except ValueError as e:
+        return jsonify({"ok": False, "error": str(e)}), 400
+
+
+@app.post("/api/point-comment")
+def api_point_comment():
+    payload = request.get_json(silent=True) or {}
+    session_id = payload.get("sessionId")
+    if not session_id:
+        return jsonify({"ok": False, "error": "sessionId required"}), 400
+
+    try:
+        meta, comment = append_point_comment(session_id, payload)
+        return jsonify({
+            "ok": True,
+            "sessionId": session_id,
+            "commentSeq": comment["comment_seq"],
+            "commentCount": meta["comment_count"],
         })
     except FileNotFoundError as e:
         return jsonify({"ok": False, "error": str(e)}), 404
