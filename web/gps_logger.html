@@ -572,6 +572,10 @@
     }
 
     async function postJson(endpoint, payload) {
+      const buildBodySnippet = (text, limit = 200) => {
+        if (!text) return "";
+        return text.replace(/\s+/g, " ").trim().slice(0, limit);
+      };
       const requestBody = JSON.stringify(payload);
       const res = await fetch(endpoint, {
         method: "POST",
@@ -580,21 +584,51 @@
         keepalive: true,
       });
       const responseText = await res.text();
+      const responseContentType = res.headers.get("content-type") || "";
       registerTrafficTransfer(
         bytesOfString(requestBody),
         bytesOfString(responseText)
       );
-      const data = responseText
-        ? (() => {
-            try {
-              return JSON.parse(responseText);
-            } catch {
-              return {};
-            }
-          })()
-        : {};
-      if (!res.ok || !data.ok) {
-        throw new Error(data.error || `HTTP ${res.status}`);
+      let data = {};
+      let jsonParsed = false;
+      if (responseText) {
+        try {
+          data = JSON.parse(responseText);
+          jsonParsed = true;
+        } catch {
+          data = {};
+        }
+      }
+      const bodySnippet = buildBodySnippet(responseText);
+      if (!res.ok) {
+        const message = jsonParsed && data.error
+          ? `API error: ${data.error}`
+          : `HTTP ${res.status}${bodySnippet ? ` | body: ${bodySnippet}` : ""}`;
+        throw {
+          name: "PostJsonHttpError",
+          message,
+          endpoint,
+          status: res.status,
+          contentType: responseContentType
+        };
+      }
+      if (data && data.error) {
+        throw {
+          name: "PostJsonApiError",
+          message: `API error: ${data.error}`,
+          endpoint,
+          status: res.status,
+          contentType: responseContentType
+        };
+      }
+      if (data && data.ok === false) {
+        throw {
+          name: "PostJsonApiError",
+          message: "API error: invalid response",
+          endpoint,
+          status: res.status,
+          contentType: responseContentType
+        };
       }
       return data;
     }
@@ -1244,14 +1278,19 @@
         const data = await postJson(POINT_MARK_ENDPOINT, payload);
         logLine(
           `[POINT MARK ${data.commentSeq ?? "ok"}] session=${payload.sessionId} seq=${payload.pointSeq} ` +
-          `color=${payload.color} sec=${payload.durationSec} comment="${payload.commentText}"`
+          `color=${payload.color} sec=${payload.durationSec} status=ok`
         );
         setStatus("Метка точки сохранена", "ok");
         closePointMarkDialog();
         resetPointMarkForm();
       } catch (e) {
         setStatus(`Ошибка сохранения метки: ${e.message}`, "bad");
-        logLine(`[POINT MARK ERR] ${e.message}`);
+        const endpointLog = e.endpoint || POINT_MARK_ENDPOINT;
+        const statusLog = e.status ?? "n/a";
+        const contentTypeLog = e.contentType || "n/a";
+        logLine(
+          `[POINT MARK ERR] endpoint=${endpointLog} status=${statusLog} content-type=${contentTypeLog} ${e.message}`
+        );
       } finally {
         els.pointMarkSaveBtn.disabled = false;
       }
