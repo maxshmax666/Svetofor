@@ -111,9 +111,9 @@ def _query_index_upsert(meta: Dict[str, Any]) -> None:
         "created_at": meta.get("created_at"),
         "closed_at": meta.get("closed_at"),
         "status": meta.get("status"),
-        "point_count": int(meta.get("point_count", 0) or 0),
-        "sensor_event_count": int(meta.get("sensor_event_count", 0) or 0),
-        "comment_count": int(meta.get("comment_count", 0) or 0),
+        "point_count": _safe_int(meta.get("point_count"), 0),
+        "sensor_event_count": _safe_int(meta.get("sensor_event_count"), 0),
+        "comment_count": _safe_int(meta.get("comment_count"), 0),
     }
     _write_json_atomic(SESSIONS_QUERY_INDEX_FILE, index_payload)
 
@@ -128,7 +128,7 @@ _DEFAULT_SENSOR_STREAMS: Dict[str, bool] = {
     "visibility_change": False,
     "battery_status": False,
 }
-_META_SCHEMA_VERSION = 2
+_META_SCHEMA_VERSION = 3
 _COMMENT_TEXT_MAX_LENGTH = 500
 _COMMENT_DURATION_MAX_SEC = 86400
 
@@ -139,6 +139,13 @@ def _write_json_atomic(path: Path, payload: Dict[str, Any]) -> None:
     tmp_path = path.with_suffix(f"{path.suffix}.tmp")
     tmp_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
     tmp_path.replace(path)
+
+
+def _safe_int(value: Any, default: int = 0) -> int:
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return default
 
 
 def _scan_max_seq(path: Path, seq_field: str) -> Optional[int]:
@@ -261,6 +268,9 @@ def normalize_meta(meta: Dict[str, Any]) -> bool:
     if "sensor_event_count" not in meta:
         meta["sensor_event_count"] = 0
         changed = True
+    elif not isinstance(meta.get("sensor_event_count"), int):
+        meta["sensor_event_count"] = _safe_int(meta.get("sensor_event_count"), 0)
+        changed = True
 
     if not meta.get("comments_file_jsonl") and session_id:
         meta["comments_file_jsonl"] = str(session_comments_jsonl_path(session_id, session_date))
@@ -268,6 +278,13 @@ def normalize_meta(meta: Dict[str, Any]) -> bool:
 
     if "comment_count" not in meta:
         meta["comment_count"] = 0
+        changed = True
+    elif not isinstance(meta.get("comment_count"), int):
+        meta["comment_count"] = _safe_int(meta.get("comment_count"), 0)
+        changed = True
+
+    if "point_count" in meta and not isinstance(meta.get("point_count"), int):
+        meta["point_count"] = _safe_int(meta.get("point_count"), 0)
         changed = True
 
     sensor_streams = meta.get("sensor_streams")
@@ -614,7 +631,7 @@ def mark_interrupted_sessions() -> int:
 
         if meta.get("status") == "active":
             meta["status"] = "interrupted"
-            _ensure_storage_model_defaults(meta)
+            normalize_meta(meta)
             _write_json_atomic(meta_path, meta)
             _query_index_upsert(meta)
             append_text_line(meta_path.parent / "events.log", f"{_now_iso()} session_interrupted {meta.get('session_id')}")
