@@ -3,6 +3,8 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <meta name="theme-color" content="#0f1115" />
+  <link rel="manifest" href="/manifest.webmanifest" />
   <title>GPS логгер курьера</title>
   <style>
     :root {
@@ -159,6 +161,11 @@
     let wakeLock = null;
     let batteryRef = null;
 
+    const OUTBOX_DB_NAME = "gps-logger-outbox";
+    const OUTBOX_STORE_NAME = "requests";
+    const OUTBOX_SYNC_TAG = "gps-outbox-sync";
+    const OUTBOX_MAX_ITEMS = 5000;
+
     const SENSOR_THROTTLE_MS = 200;
     let lastAccelAt = 0;
     let lastGyroAt = 0;
@@ -181,6 +188,160 @@
       stopBtn: document.getElementById("stopBtn"),
       exportBtn: document.getElementById("exportBtn"),
     };
+
+
+    async function registerServiceWorker() {
+      if (!("serviceWorker" in navigator)) return;
+      try {
+        await navigator.serviceWorker.register("/sw.js", { scope: "/" });
+      } catch (e) {
+        logLine(`[SW WARN] ${e.message}`);
+      }
+    }
+
+    function openOutboxDb() {
+      return new Promise((resolve, reject) => {
+        const req = indexedDB.open(OUTBOX_DB_NAME, 1);
+        req.onupgradeneeded = () => {
+          const db = req.result;
+          if (!db.objectStoreNames.contains(OUTBOX_STORE_NAME)) {
+            const store = db.createObjectStore(OUTBOX_STORE_NAME, { keyPath: "id" });
+            store.createIndex("createdAt", "createdAt", { unique: false });
+          }
+        };
+        req.onsuccess = () => resolve(req.result);
+        req.onerror = () => reject(req.error || new Error("IndexedDB open failed"));
+      });
+    }
+
+    async function putOutboxItem(endpoint, payload) {
+      const db = await openOutboxDb();
+      await new Promise((resolve, reject) => {
+        const tx = db.transaction(OUTBOX_STORE_NAME, "readwrite");
+        const store = tx.objectStore(OUTBOX_STORE_NAME);
+        store.put({
+          id: crypto.randomUUID(),
+          endpoint,
+          payload,
+          createdAt: Date.now(),
+          retries: 0
+        });
+        tx.oncomplete = resolve;
+        tx.onerror = () => reject(tx.error || new Error("IndexedDB put failed"));
+      });
+    }
+
+    async function getOutboxItems(limit = 50) {
+      const db = await openOutboxDb();
+      return new Promise((resolve, reject) => {
+        const tx = db.transaction(OUTBOX_STORE_NAME, "readonly");
+        const index = tx.objectStore(OUTBOX_STORE_NAME).index("createdAt");
+        const items = [];
+        const req = index.openCursor();
+        req.onsuccess = () => {
+          const cursor = req.result;
+          if (!cursor || items.length >= limit) {
+            resolve(items);
+            return;
+          }
+          items.push(cursor.value);
+          cursor.continue();
+        };
+        req.onerror = () => reject(req.error || new Error("IndexedDB cursor failed"));
+      });
+    }
+
+    async function deleteOutboxItem(id) {
+      const db = await openOutboxDb();
+      await new Promise((resolve, reject) => {
+        const tx = db.transaction(OUTBOX_STORE_NAME, "readwrite");
+        tx.objectStore(OUTBOX_STORE_NAME).delete(id);
+        tx.oncomplete = resolve;
+        tx.onerror = () => reject(tx.error || new Error("IndexedDB delete failed"));
+      });
+    }
+
+    async function trimOutboxIfNeeded() {
+      const db = await openOutboxDb();
+      const count = await new Promise((resolve, reject) => {
+        const tx = db.transaction(OUTBOX_STORE_NAME, "readonly");
+        const req = tx.objectStore(OUTBOX_STORE_NAME).count();
+        req.onsuccess = () => resolve(req.result || 0);
+        req.onerror = () => reject(req.error || new Error("IndexedDB count failed"));
+      });
+
+      if (count <= OUTBOX_MAX_ITEMS) return;
+      const toDrop = count - OUTBOX_MAX_ITEMS;
+
+      await new Promise((resolve, reject) => {
+        const tx = db.transaction(OUTBOX_STORE_NAME, "readwrite");
+        const index = tx.objectStore(OUTBOX_STORE_NAME).index("createdAt");
+        let removed = 0;
+        const req = index.openCursor();
+        req.onsuccess = () => {
+          const cursor = req.result;
+          if (!cursor || removed >= toDrop) return;
+          cursor.delete();
+          removed += 1;
+          cursor.continue();
+        };
+        tx.oncomplete = resolve;
+        tx.onerror = () => reject(tx.error || new Error("IndexedDB trim failed"));
+      });
+
+      logLine(`[OUTBOX WARN] Очередь переполнена, удалено: ${toDrop}`);
+    }
+
+    async function registerOutboxSync() {
+      if (!("serviceWorker" in navigator)) return;
+      try {
+        const registration = await navigator.serviceWorker.ready;
+        if (registration.sync && registration.sync.register) {
+          await registration.sync.register(OUTBOX_SYNC_TAG);
+        }
+      } catch (e) {
+        logLine(`[SYNC WARN] ${e.message}`);
+      }
+    }
+
+    async function postJson(endpoint, payload) {
+      const res = await fetch(endpoint, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+        keepalive: true,
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok || !data.ok) {
+        throw new Error(data.error || `HTTP ${res.status}`);
+      }
+      return data;
+    }
+
+    async function postJsonDurable(endpoint, payload) {
+      try {
+        return await postJson(endpoint, payload);
+      } catch (e) {
+        await putOutboxItem(endpoint, payload);
+        await trimOutboxIfNeeded();
+        await registerOutboxSync();
+        logLine(`[OUTBOX] queued ${endpoint} | reason=${e.message}`);
+        setStatus("Оффлайн/фон: событие поставлено в очередь", "warn");
+        return null;
+      }
+    }
+
+    async function flushOutboxInPage(maxItems = 50) {
+      const items = await getOutboxItems(maxItems);
+      for (const item of items) {
+        try {
+          await postJson(item.endpoint, item.payload);
+          await deleteOutboxItem(item.id);
+        } catch {
+          break;
+        }
+      }
+    }
 
     function setStatus(text, type="ok") {
       const cls = type === "ok" ? "status-ok" : type === "warn" ? "status-warn" : "status-bad";
@@ -349,10 +510,7 @@
 
     async function postSensorEvent(payload) {
       if (!sessionId) return;
-      const res = await fetch("/api/sensor-event", {
-        method: "POST",
-        headers: {"Content-Type":"application/json"},
-        body: JSON.stringify({
+      const data = await postJsonDurable("/api/sensor-event", {
           sessionId,
           clientTimestampMs: payload.clientTimestampMs,
           clientIsoTime: payload.clientIsoTime,
@@ -371,12 +529,12 @@
           quality: payload.quality,
           sampleSource: payload.sampleSource,
           userAgent: navigator.userAgent
-        }),
       });
 
-      const data = await res.json();
-      if (!res.ok || !data.ok) {
-        throw new Error(data.error || `HTTP ${res.status}`);
+      if (!data) {
+        sensorCount += 1;
+        els.sensorCount.textContent = String(sensorCount);
+        return;
       }
 
       sensorCount = data.sensorEventCount ?? (sensorCount + 1);
@@ -602,15 +760,12 @@
           userAgent: navigator.userAgent
         };
 
-        const res = await fetch("/api/point", {
-          method: "POST",
-          headers: {"Content-Type":"application/json"},
-          body: JSON.stringify(payload),
-        });
-
-        const data = await res.json();
-        if (!res.ok || !data.ok) {
-          throw new Error(data.error || `HTTP ${res.status}`);
+        const data = await postJsonDurable("/api/point", payload);
+        if (!data) {
+          sentCount += 1;
+          els.sentCount.textContent = String(sentCount);
+          logLine(`[POINT QUEUED] ${payload.clientLocalTime} | ${Number(payload.latitude).toFixed(6)}, ${Number(payload.longitude).toFixed(6)}`);
+          return;
         }
 
         sentCount = data.pointCount ?? (sentCount + 1);
@@ -640,9 +795,16 @@
     }
 
     document.addEventListener("visibilitychange", async () => {
-      if (document.visibilityState === "visible" && watchId != null) {
+      if (document.visibilityState === "visible") {
         await requestWakeLock();
+        await flushOutboxInPage(100).catch(() => {});
       }
+    });
+
+    window.addEventListener("online", () => {
+      flushOutboxInPage(100).catch((e) => {
+        logLine(`[OUTBOX ERR] ${e.message}`);
+      });
     });
 
     window.addEventListener("beforeunload", async () => {
@@ -654,6 +816,8 @@
         );
       } catch {}
     });
+
+    registerServiceWorker().then(() => flushOutboxInPage(100)).catch(() => {});
 
     els.startBtn.addEventListener("click", () => {
       startSession().catch((e) => {

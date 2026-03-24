@@ -30,6 +30,21 @@ def index() -> Response:
     return Response(html_path.read_text(encoding="utf-8"), mimetype="text/html")
 
 
+@app.get("/sw.js")
+def service_worker() -> Response:
+    sw_path = Path(__file__).resolve().parent.parent / "web" / "sw.js"
+    response = Response(sw_path.read_text(encoding="utf-8"), mimetype="application/javascript")
+    response.headers["Service-Worker-Allowed"] = "/"
+    response.headers["Cache-Control"] = "no-cache"
+    return response
+
+
+@app.get("/manifest.webmanifest")
+def web_manifest() -> Response:
+    manifest_path = Path(__file__).resolve().parent.parent / "web" / "manifest.webmanifest"
+    return Response(manifest_path.read_text(encoding="utf-8"), mimetype="application/manifest+json")
+
+
 @app.get("/health")
 def health():
     return jsonify({
