@@ -115,6 +115,34 @@
 
     .small { color:var(--muted); font-size:12px; }
     .mono { font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; }
+
+    .traffic-widget {
+      position: fixed;
+      right: 12px;
+      bottom: 12px;
+      z-index: 999;
+      min-width: 170px;
+      padding: 8px 10px;
+      background: rgba(11, 13, 17, 0.92);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      box-shadow: 0 6px 20px rgba(0, 0, 0, 0.35);
+      backdrop-filter: blur(3px);
+    }
+    .traffic-widget .title {
+      color: var(--muted);
+      font-size: 11px;
+      margin-bottom: 6px;
+    }
+    .traffic-widget .line {
+      display: flex;
+      justify-content: space-between;
+      gap: 10px;
+      font-size: 12px;
+    }
+    .traffic-widget .line + .line { margin-top: 4px; }
+    .traffic-widget .label { color: var(--muted); }
+    .traffic-widget .value { color: var(--text); }
   </style>
 </head>
 <body>
@@ -153,6 +181,18 @@
     </div>
   </div>
 
+  <div class="traffic-widget" aria-live="polite">
+    <div class="title">Трафик за сессию</div>
+    <div class="line">
+      <span class="label">Отправлено</span>
+      <span class="value mono" id="trafficOut">0 B</span>
+    </div>
+    <div class="line">
+      <span class="label">Получено</span>
+      <span class="value mono" id="trafficIn">0 B</span>
+    </div>
+  </div>
+
   <script>
     let watchId = null;
     let sessionId = null;
@@ -160,6 +200,8 @@
     let sensorCount = 0;
     let wakeLock = null;
     let batteryRef = null;
+    let trafficOutBytes = 0;
+    let trafficInBytes = 0;
 
     const OUTBOX_DB_NAME = "gps-logger-outbox";
     const OUTBOX_STORE_NAME = "requests";
@@ -187,8 +229,40 @@
       startBtn: document.getElementById("startBtn"),
       stopBtn: document.getElementById("stopBtn"),
       exportBtn: document.getElementById("exportBtn"),
+      trafficOut: document.getElementById("trafficOut"),
+      trafficIn: document.getElementById("trafficIn"),
     };
 
+    const encoder = new TextEncoder();
+
+    function bytesOfString(value) {
+      if (!value) return 0;
+      return encoder.encode(value).byteLength;
+    }
+
+    function formatBytes(bytes) {
+      if (!Number.isFinite(bytes) || bytes <= 0) return "0 B";
+      const units = ["B", "KB", "MB", "GB"];
+      let size = bytes;
+      let idx = 0;
+      while (size >= 1024 && idx < units.length - 1) {
+        size /= 1024;
+        idx += 1;
+      }
+      const precision = idx === 0 ? 0 : size >= 100 ? 0 : size >= 10 ? 1 : 2;
+      return `${size.toFixed(precision)} ${units[idx]}`;
+    }
+
+    function renderTrafficWidget() {
+      els.trafficOut.textContent = formatBytes(trafficOutBytes);
+      els.trafficIn.textContent = formatBytes(trafficInBytes);
+    }
+
+    function registerTrafficTransfer(outBytes, inBytes) {
+      if (Number.isFinite(outBytes) && outBytes > 0) trafficOutBytes += outBytes;
+      if (Number.isFinite(inBytes) && inBytes > 0) trafficInBytes += inBytes;
+      renderTrafficWidget();
+    }
 
     async function registerServiceWorker() {
       if (!("serviceWorker" in navigator)) return;
@@ -305,13 +379,27 @@
     }
 
     async function postJson(endpoint, payload) {
+      const requestBody = JSON.stringify(payload);
       const res = await fetch(endpoint, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(payload),
+        body: requestBody,
         keepalive: true,
       });
-      const data = await res.json().catch(() => ({}));
+      const responseText = await res.text();
+      registerTrafficTransfer(
+        bytesOfString(requestBody),
+        bytesOfString(responseText)
+      );
+      const data = responseText
+        ? (() => {
+            try {
+              return JSON.parse(responseText);
+            } catch {
+              return {};
+            }
+          })()
+        : {};
       if (!res.ok || !data.ok) {
         throw new Error(data.error || `HTTP ${res.status}`);
       }
@@ -431,16 +519,7 @@
         sensorThrottleMs: SENSOR_THROTTLE_MS
       };
 
-      const res = await fetch("/api/session/start", {
-        method: "POST",
-        headers: {"Content-Type":"application/json"},
-        body: JSON.stringify(payload),
-      });
-
-      const data = await res.json();
-      if (!res.ok || !data.ok) {
-        throw new Error(data.error || `HTTP ${res.status}`);
-      }
+      const data = await postJson("/api/session/start", payload);
 
       sessionId = data.session.session_id;
       sentCount = 0;
@@ -491,16 +570,7 @@
       releaseWakeLock();
 
       const currentSessionId = sessionId;
-      const res = await fetch("/api/session/stop", {
-        method: "POST",
-        headers: {"Content-Type":"application/json"},
-        body: JSON.stringify({ sessionId: currentSessionId }),
-      });
-
-      const data = await res.json();
-      if (!res.ok || !data.ok) {
-        throw new Error(data.error || `HTTP ${res.status}`);
-      }
+      await postJson("/api/session/stop", { sessionId: currentSessionId });
 
       logLine(`[SESSION STOP] ${currentSessionId}`);
       setStatus("Сессия остановлена", "warn");
@@ -818,6 +888,7 @@
     });
 
     registerServiceWorker().then(() => flushOutboxInPage(100)).catch(() => {});
+    renderTrafficWidget();
 
     els.startBtn.addEventListener("click", () => {
       startSession().catch((e) => {
