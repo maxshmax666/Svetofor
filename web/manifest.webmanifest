@@ -1,0 +1,11 @@
+{
+  "name": "GPS логгер курьера",
+  "short_name": "GPS Logger",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#0f1115",
+  "theme_color": "#0f1115",
+  "description": "RAW GPS + sensor logger for courier tracking",
+  "lang": "ru",
+  "icons": []
+}
