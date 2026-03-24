@@ -67,3 +67,22 @@ else
   echo "  [ERR] /health unavailable"
   exit 1
 fi
+
+echo "[4] POST /api/point-comment route"
+POINT_COMMENT_URL="http://127.0.0.1:${PORT}/api/point-comment"
+POINT_COMMENT_STATUS="$(curl -sS -o /tmp/gps_logger_point_comment_smoke.json -w "%{http_code}" \
+  -H "Content-Type: application/json" \
+  -d '{}' \
+  "$POINT_COMMENT_URL")"
+
+if [ "$POINT_COMMENT_STATUS" = "404" ]; then
+  echo "  [ERR] route not found: $POINT_COMMENT_URL"
+  cat /tmp/gps_logger_point_comment_smoke.json || true
+  exit 1
+fi
+if [ "$POINT_COMMENT_STATUS" = "000" ]; then
+  echo "  [ERR] request failed: $POINT_COMMENT_URL"
+  exit 1
+fi
+
+echo "  [OK] route available, status=$POINT_COMMENT_STATUS"
