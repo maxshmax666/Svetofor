@@ -4,7 +4,12 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width,initial-scale=1" />
   <meta name="theme-color" content="#0f1115" />
+  <meta name="mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
   <link rel="manifest" href="/manifest.webmanifest" />
+  <link rel="icon" type="image/png" sizes="192x192" href="/icons/icon-192.png" />
+  <link rel="apple-touch-icon" href="/icons/icon-192.png" />
   <title>GPS логгер курьера</title>
   <style>
     :root {
@@ -169,9 +174,10 @@
       width: min(560px, calc(100vw - 24px));
       margin: auto;
       padding: 0;
-      background: var(--panel);
+      background: rgba(23, 26, 33, 0.88);
       color: var(--text);
       box-shadow: 0 24px 64px rgba(0,0,0,.55);
+      backdrop-filter: blur(8px);
     }
     dialog.point-modal::backdrop {
       background: rgba(0, 0, 0, .62);
@@ -220,9 +226,65 @@
     }
     .modal-actions {
       display: flex;
-      justify-content: flex-end;
-      gap: 8px;
+      justify-content: center;
+      gap: 12px;
       margin-top: 14px;
+    }
+    .modal-actions button {
+      min-width: 176px;
+      min-height: 52px;
+      font-size: 20px;
+      border-radius: 14px;
+    }
+    .segment-group {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px;
+    }
+    .segment-btn {
+      min-width: 110px;
+      min-height: 46px;
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      background: #111622;
+      color: var(--text);
+      padding: 8px 14px;
+      font-size: 19px;
+      line-height: 1;
+    }
+    .segment-btn[aria-pressed="true"] {
+      background: var(--primary);
+      border-color: var(--primary);
+    }
+    .seconds-grid {
+      display: grid;
+      grid-template-columns: repeat(5, minmax(0, 1fr));
+      gap: 8px;
+      max-height: 220px;
+      overflow-y: auto;
+      padding-right: 4px;
+    }
+    .sec-btn {
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      background: #111622;
+      color: var(--text);
+      min-height: 40px;
+      font-size: 16px;
+      padding: 0 8px;
+      text-align: center;
+    }
+    .sec-btn[aria-pressed="true"] {
+      background: var(--primary);
+      border-color: var(--primary);
+      font-weight: 700;
+    }
+    @media (max-width:520px) {
+      .seconds-grid { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+      .modal-actions button {
+        min-width: 130px;
+        font-size: 18px;
+      }
     }
   </style>
 </head>
@@ -286,15 +348,16 @@
 
       <div class="modal-field">
         <label>Цвет</label>
-        <div class="modal-inline" role="radiogroup" aria-label="Цвет метки">
-          <label><input type="radio" name="markColor" value="red" required /> red</label>
-          <label><input type="radio" name="markColor" value="green" required /> green</label>
+        <div class="segment-group" id="colorSegment" role="radiogroup" aria-label="Цвет метки">
+          <button type="button" class="segment-btn" data-color="red" aria-pressed="true">red</button>
+          <button type="button" class="segment-btn" data-color="green" aria-pressed="false">green</button>
         </div>
       </div>
 
       <div class="modal-field">
         <label for="markSeconds">Секунды</label>
-        <input id="markSeconds" name="markSeconds" class="modal-input" type="number" min="1" step="1" inputmode="numeric" required />
+        <input id="markSeconds" name="markSeconds" class="modal-input" type="number" min="16" max="65" step="1" inputmode="numeric" required hidden />
+        <div class="seconds-grid" id="secondsGrid" role="listbox" aria-label="Длительность метки в секундах"></div>
       </div>
 
       <div class="modal-field">
@@ -320,7 +383,9 @@
     let trafficInBytes = 0;
     let lastPointSnapshot = null;
 
-    const POINT_MARK_ENDPOINT = "/api/point/annotation";
+    const POINT_MARK_ENDPOINT = "/api/point-comment";
+    const MARK_DURATION_MIN = 16;
+    const MARK_DURATION_MAX = 65;
 
     const OUTBOX_DB_NAME = "gps-logger-outbox";
     const OUTBOX_STORE_NAME = "requests";
@@ -357,7 +422,8 @@
       pointMarkSaveBtn: document.getElementById("pointMarkSaveBtn"),
       pointMarkSeconds: document.getElementById("markSeconds"),
       pointMarkComment: document.getElementById("markComment"),
-      pointMarkColorInputs: document.querySelectorAll('input[name="markColor"]'),
+      colorSegment: document.getElementById("colorSegment"),
+      secondsGrid: document.getElementById("secondsGrid"),
     };
 
     const encoder = new TextEncoder();
@@ -583,11 +649,10 @@
 
     function resetPointMarkForm() {
       els.pointMarkForm.reset();
-      els.pointMarkSeconds.value = "1";
+      els.pointMarkSeconds.value = "32";
       els.pointMarkComment.value = "";
-      if (els.pointMarkColorInputs[0]) {
-        els.pointMarkColorInputs[0].checked = true;
-      }
+      selectColorButton("red");
+      selectSecondsButton(32);
     }
 
     function openPointMarkDialog() {
@@ -617,8 +682,39 @@
     }
 
     function getSelectedMarkColor() {
-      const selected = Array.from(els.pointMarkColorInputs).find((el) => el.checked);
-      return selected ? selected.value : "";
+      const selected = els.colorSegment.querySelector('.segment-btn[aria-pressed="true"]');
+      return selected ? selected.dataset.color : "";
+    }
+
+    function selectColorButton(color) {
+      els.colorSegment.querySelectorAll(".segment-btn").forEach((btn) => {
+        btn.setAttribute("aria-pressed", btn.dataset.color === color ? "true" : "false");
+      });
+    }
+
+    function selectSecondsButton(value) {
+      els.pointMarkSeconds.value = String(value);
+      els.secondsGrid.querySelectorAll(".sec-btn").forEach((btn) => {
+        const active = Number.parseInt(btn.dataset.seconds || "", 10) === value;
+        btn.setAttribute("aria-pressed", active ? "true" : "false");
+      });
+    }
+
+    function initSecondsButtons() {
+      const fragment = document.createDocumentFragment();
+      for (let value = MARK_DURATION_MIN; value <= MARK_DURATION_MAX; value += 1) {
+        const button = document.createElement("button");
+        button.type = "button";
+        button.className = "sec-btn";
+        button.dataset.seconds = String(value);
+        button.textContent = String(value);
+        button.setAttribute("aria-pressed", "false");
+        button.addEventListener("click", () => {
+          selectSecondsButton(value);
+        });
+        fragment.appendChild(button);
+      }
+      els.secondsGrid.replaceChildren(fragment);
     }
 
     async function getBatteryLevel() {
@@ -1119,8 +1215,8 @@
         setStatus("Неверный цвет метки", "warn");
         return;
       }
-      if (!Number.isInteger(seconds) || seconds < 1) {
-        setStatus("Секунды должны быть целым числом > 0", "warn");
+      if (!Number.isInteger(seconds) || seconds < MARK_DURATION_MIN || seconds > MARK_DURATION_MAX) {
+        setStatus(`Секунды должны быть целым числом от ${MARK_DURATION_MIN} до ${MARK_DURATION_MAX}`, "warn");
         return;
       }
       if (!comment) {
@@ -1130,20 +1226,25 @@
 
       els.pointMarkSaveBtn.disabled = true;
       try {
+        const nowTs = Date.now();
         const payload = {
           sessionId: lastPointSnapshot.sessionId,
           pointSeq: lastPointSnapshot.pointSeq,
           latitude: lastPointSnapshot.lat,
           longitude: lastPointSnapshot.lon,
-          clientTimestampMs: lastPointSnapshot.clientTimestampMs,
+          pointClientTimestampMs: lastPointSnapshot.clientTimestampMs,
+          clientTimestampMs: nowTs,
+          clientIsoTime: new Date(nowTs).toISOString(),
+          clientLocalTime: formatLocal(nowTs),
+          userAgent: navigator.userAgent,
           color,
-          durationSeconds: seconds,
-          comment
+          durationSec: seconds,
+          commentText: comment
         };
         const data = await postJson(POINT_MARK_ENDPOINT, payload);
         logLine(
-          `[POINT MARK ${data.markSeq ?? "ok"}] session=${payload.sessionId} seq=${payload.pointSeq} ` +
-          `color=${payload.color} sec=${payload.durationSeconds} comment="${payload.comment}"`
+          `[POINT MARK ${data.commentSeq ?? "ok"}] session=${payload.sessionId} seq=${payload.pointSeq} ` +
+          `color=${payload.color} sec=${payload.durationSec} comment="${payload.commentText}"`
         );
         setStatus("Метка точки сохранена", "ok");
         closePointMarkDialog();
@@ -1155,6 +1256,14 @@
         els.pointMarkSaveBtn.disabled = false;
       }
     });
+
+    initSecondsButtons();
+    els.colorSegment.querySelectorAll(".segment-btn").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        selectColorButton(btn.dataset.color || "red");
+      });
+    });
+    resetPointMarkForm();
   </script>
 </body>
 </html>

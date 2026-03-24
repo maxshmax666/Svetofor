@@ -1,5 +1,7 @@
 from __future__ import annotations
 import json
+import struct
+import zlib
 from pathlib import Path
 
 from flask import Flask, jsonify, request, send_file, Response
@@ -25,6 +27,34 @@ from app.session_manager import (
 app = Flask(__name__, static_folder=None, template_folder=None)
 
 
+def _build_solid_png(size: int, rgb: tuple[int, int, int] = (31, 111, 235)) -> bytes:
+    """
+    Build an RGB PNG image in-memory.
+
+    We generate icon PNG bytes on demand to keep repository text-only
+    (no binary assets in git), while still serving valid PWA icons.
+    """
+    if size <= 0 or size > 2048:
+        raise ValueError("invalid icon size")
+
+    width = height = size
+    row = bytes([0]) + bytes(rgb) * width
+    raw = row * height
+
+    def _chunk(chunk_type: bytes, data: bytes) -> bytes:
+        checksum = zlib.crc32(chunk_type + data) & 0xFFFFFFFF
+        return (
+            struct.pack(">I", len(data))
+            + chunk_type
+            + data
+            + struct.pack(">I", checksum)
+        )
+
+    ihdr = struct.pack(">IIBBBBB", width, height, 8, 2, 0, 0, 0)
+    idat = zlib.compress(raw, level=9)
+    return b"\x89PNG\r\n\x1a\n" + _chunk(b"IHDR", ihdr) + _chunk(b"IDAT", idat) + _chunk(b"IEND", b"")
+
+
 @app.get("/")
 def index() -> Response:
     html_path = Path(__file__).resolve().parent.parent / "web" / "gps_logger.html"
@@ -44,6 +74,22 @@ def service_worker() -> Response:
 def web_manifest() -> Response:
     manifest_path = Path(__file__).resolve().parent.parent / "web" / "manifest.webmanifest"
     return Response(manifest_path.read_text(encoding="utf-8"), mimetype="application/manifest+json")
+
+
+@app.get("/icons/<path:filename>")
+def web_icons(filename: str):
+    icon_map = {
+        "icon-192.png": 192,
+        "icon-512.png": 512,
+    }
+    size = icon_map.get(filename)
+    if size is None:
+        return jsonify({"ok": False, "error": "icon not found"}), 404
+    try:
+        payload = _build_solid_png(size)
+    except ValueError as exc:
+        return jsonify({"ok": False, "error": str(exc)}), 400
+    return Response(payload, mimetype="image/png")
 
 
 @app.get("/health")
