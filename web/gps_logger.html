@@ -143,6 +143,87 @@
     .traffic-widget .line + .line { margin-top: 4px; }
     .traffic-widget .label { color: var(--muted); }
     .traffic-widget .value { color: var(--text); }
+
+    .coord-btn {
+      width: 100%;
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      background: #111622;
+      color: var(--text);
+      padding: 8px 10px;
+      text-align: left;
+      font-family: ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+      font-size: 15px;
+      cursor: pointer;
+      transition: background-color .15s ease, border-color .15s ease;
+    }
+    .coord-btn:hover { background: #182034; border-color: #3b4a63; }
+    .coord-btn:focus-visible {
+      outline: 2px solid var(--primary);
+      outline-offset: 2px;
+    }
+
+    dialog.point-modal {
+      border: 0;
+      border-radius: 14px;
+      width: min(560px, calc(100vw - 24px));
+      margin: auto;
+      padding: 0;
+      background: var(--panel);
+      color: var(--text);
+      box-shadow: 0 24px 64px rgba(0,0,0,.55);
+    }
+    dialog.point-modal::backdrop {
+      background: rgba(0, 0, 0, .62);
+      backdrop-filter: blur(2px);
+    }
+    .modal-panel { padding: 16px; }
+    .modal-title { margin: 0 0 6px; font-size: 18px; }
+    .modal-subtitle {
+      color: var(--muted);
+      font-size: 13px;
+      margin-bottom: 14px;
+      word-break: break-word;
+    }
+    .modal-field { margin-bottom: 12px; }
+    .modal-field label {
+      display: block;
+      margin-bottom: 6px;
+      font-size: 13px;
+      color: var(--muted);
+    }
+    .modal-inline {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 14px;
+    }
+    .modal-inline label {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      color: var(--text);
+      margin-bottom: 0;
+    }
+    .modal-input {
+      width: 100%;
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      background: #111622;
+      color: var(--text);
+      font-size: 14px;
+      padding: 10px 12px;
+    }
+    textarea.modal-input { min-height: 96px; resize: vertical; }
+    .modal-input:focus-visible {
+      outline: 2px solid var(--primary);
+      outline-offset: 1px;
+    }
+    .modal-actions {
+      display: flex;
+      justify-content: flex-end;
+      gap: 8px;
+      margin-top: 14px;
+    }
   </style>
 </head>
 <body>
@@ -166,7 +247,12 @@
         <div class="kv"><div class="k">Sensor events</div><div class="v" id="sensorCount">0</div></div>
         <div class="kv"><div class="k">Последнее client time</div><div class="v" id="lastClientTime">—</div></div>
         <div class="kv"><div class="k">Последнее server time</div><div class="v" id="lastServerTime">—</div></div>
-        <div class="kv"><div class="k">Последняя координата</div><div class="v mono" id="lastCoord">—</div></div>
+        <div class="kv">
+          <div class="k">Последняя координата</div>
+          <div class="v">
+            <button type="button" class="coord-btn" id="lastCoord" aria-haspopup="dialog">—</button>
+          </div>
+        </div>
         <div class="kv"><div class="k">Accuracy / Speed / Heading</div><div class="v" id="lastQuality">—</div></div>
         <div class="kv"><div class="k">Последний sensor event</div><div class="v" id="lastSensorInfo">—</div></div>
         <div class="kv"><div class="k">Raw position timestamp</div><div class="v mono" id="lastRawTimestamp">—</div></div>
@@ -193,6 +279,36 @@
     </div>
   </div>
 
+  <dialog id="pointMarkDialog" class="point-modal" aria-labelledby="pointMarkTitle">
+    <form method="dialog" class="modal-panel" id="pointMarkForm">
+      <h2 id="pointMarkTitle" class="modal-title">Пометить последнюю точку</h2>
+      <div id="pointMarkSummary" class="modal-subtitle">—</div>
+
+      <div class="modal-field">
+        <label>Цвет</label>
+        <div class="modal-inline" role="radiogroup" aria-label="Цвет метки">
+          <label><input type="radio" name="markColor" value="red" required /> red</label>
+          <label><input type="radio" name="markColor" value="green" required /> green</label>
+        </div>
+      </div>
+
+      <div class="modal-field">
+        <label for="markSeconds">Секунды</label>
+        <input id="markSeconds" name="markSeconds" class="modal-input" type="number" min="1" step="1" inputmode="numeric" required />
+      </div>
+
+      <div class="modal-field">
+        <label for="markComment">Комментарий</label>
+        <textarea id="markComment" name="markComment" class="modal-input" required></textarea>
+      </div>
+
+      <div class="modal-actions">
+        <button type="button" id="pointMarkCancelBtn">Отмена</button>
+        <button type="submit" class="primary" id="pointMarkSaveBtn">Сохранить</button>
+      </div>
+    </form>
+  </dialog>
+
   <script>
     let watchId = null;
     let sessionId = null;
@@ -202,6 +318,9 @@
     let batteryRef = null;
     let trafficOutBytes = 0;
     let trafficInBytes = 0;
+    let lastPointSnapshot = null;
+
+    const POINT_MARK_ENDPOINT = "/api/point/annotation";
 
     const OUTBOX_DB_NAME = "gps-logger-outbox";
     const OUTBOX_STORE_NAME = "requests";
@@ -231,6 +350,14 @@
       exportBtn: document.getElementById("exportBtn"),
       trafficOut: document.getElementById("trafficOut"),
       trafficIn: document.getElementById("trafficIn"),
+      pointMarkDialog: document.getElementById("pointMarkDialog"),
+      pointMarkForm: document.getElementById("pointMarkForm"),
+      pointMarkSummary: document.getElementById("pointMarkSummary"),
+      pointMarkCancelBtn: document.getElementById("pointMarkCancelBtn"),
+      pointMarkSaveBtn: document.getElementById("pointMarkSaveBtn"),
+      pointMarkSeconds: document.getElementById("markSeconds"),
+      pointMarkComment: document.getElementById("markComment"),
+      pointMarkColorInputs: document.querySelectorAll('input[name="markColor"]'),
     };
 
     const encoder = new TextEncoder();
@@ -454,6 +581,46 @@
       });
     }
 
+    function resetPointMarkForm() {
+      els.pointMarkForm.reset();
+      els.pointMarkSeconds.value = "1";
+      els.pointMarkComment.value = "";
+      if (els.pointMarkColorInputs[0]) {
+        els.pointMarkColorInputs[0].checked = true;
+      }
+    }
+
+    function openPointMarkDialog() {
+      if (!sessionId || !lastPointSnapshot) {
+        setStatus("Нет активной сессии или последней точки для пометки", "warn");
+        return;
+      }
+
+      if (!Number.isFinite(lastPointSnapshot.pointSeq)) {
+        setStatus("Точка ещё не подтверждена сервером, попробуйте позже", "warn");
+        return;
+      }
+
+      resetPointMarkForm();
+      els.pointMarkSummary.textContent =
+        `session=${lastPointSnapshot.sessionId}, seq=${lastPointSnapshot.pointSeq}, ` +
+        `${Number(lastPointSnapshot.lat).toFixed(6)}, ${Number(lastPointSnapshot.lon).toFixed(6)}, ` +
+        `t=${formatLocal(lastPointSnapshot.clientTimestampMs)}`;
+      els.pointMarkDialog.showModal();
+      els.pointMarkSeconds.focus();
+    }
+
+    function closePointMarkDialog() {
+      if (els.pointMarkDialog.open) {
+        els.pointMarkDialog.close();
+      }
+    }
+
+    function getSelectedMarkColor() {
+      const selected = Array.from(els.pointMarkColorInputs).find((el) => el.checked);
+      return selected ? selected.value : "";
+    }
+
     async function getBatteryLevel() {
       try {
         if (!navigator.getBattery) return { batteryLevel: null, isCharging: null };
@@ -575,6 +742,7 @@
       logLine(`[SESSION STOP] ${currentSessionId}`);
       setStatus("Сессия остановлена", "warn");
       sessionId = null;
+      lastPointSnapshot = null;
       els.sessionId.textContent = "—";
     }
 
@@ -834,6 +1002,14 @@
         if (!data) {
           sentCount += 1;
           els.sentCount.textContent = String(sentCount);
+          lastPointSnapshot = {
+            sessionId,
+            pointSeq: null,
+            lat: payload.latitude,
+            lon: payload.longitude,
+            clientTimestampMs: payload.clientTimestampMs
+          };
+          els.lastCoord.textContent = `${Number(payload.latitude).toFixed(6)}, ${Number(payload.longitude).toFixed(6)}`;
           logLine(`[POINT QUEUED] ${payload.clientLocalTime} | ${Number(payload.latitude).toFixed(6)}, ${Number(payload.longitude).toFixed(6)}`);
           return;
         }
@@ -843,6 +1019,13 @@
         els.lastClientTime.textContent = `${payload.clientLocalTime} | ${payload.clientIsoTime}`;
         els.lastServerTime.textContent = new Date().toISOString();
         els.lastCoord.textContent = `${Number(payload.latitude).toFixed(6)}, ${Number(payload.longitude).toFixed(6)}`;
+        lastPointSnapshot = {
+          sessionId,
+          pointSeq: data.pointSeq ?? null,
+          lat: payload.latitude,
+          lon: payload.longitude,
+          clientTimestampMs: payload.clientTimestampMs
+        };
         els.lastQuality.textContent =
           `acc=${payload.accuracyM ?? "—"}м | speed=${payload.speedMps ?? "—"} м/с | heading=${payload.headingDeg ?? "—"}°`;
         els.lastRawTimestamp.textContent = String(payload.rawPositionTimestampMs ?? "—");
@@ -902,6 +1085,75 @@
         setStatus(`Ошибка остановки: ${e.message}`, "bad");
         logLine(`[STOP ERR] ${e.message}`);
       });
+    });
+
+    els.lastCoord.addEventListener("click", () => {
+      openPointMarkDialog();
+    });
+
+    els.lastCoord.addEventListener("keydown", (event) => {
+      if (event.key === "Enter" || event.key === " ") {
+        event.preventDefault();
+        openPointMarkDialog();
+      }
+    });
+
+    els.pointMarkCancelBtn.addEventListener("click", () => {
+      closePointMarkDialog();
+    });
+
+    els.pointMarkForm.addEventListener("submit", async (event) => {
+      event.preventDefault();
+
+      if (!sessionId || !lastPointSnapshot || !Number.isFinite(lastPointSnapshot.pointSeq)) {
+        setStatus("Нет валидной точки для пометки", "warn");
+        return;
+      }
+
+      const color = getSelectedMarkColor();
+      const seconds = Number.parseInt(els.pointMarkSeconds.value, 10);
+      const comment = els.pointMarkComment.value.trim();
+      const allowedColors = new Set(["red", "green"]);
+
+      if (!allowedColors.has(color)) {
+        setStatus("Неверный цвет метки", "warn");
+        return;
+      }
+      if (!Number.isInteger(seconds) || seconds < 1) {
+        setStatus("Секунды должны быть целым числом > 0", "warn");
+        return;
+      }
+      if (!comment) {
+        setStatus("Комментарий обязателен", "warn");
+        return;
+      }
+
+      els.pointMarkSaveBtn.disabled = true;
+      try {
+        const payload = {
+          sessionId: lastPointSnapshot.sessionId,
+          pointSeq: lastPointSnapshot.pointSeq,
+          latitude: lastPointSnapshot.lat,
+          longitude: lastPointSnapshot.lon,
+          clientTimestampMs: lastPointSnapshot.clientTimestampMs,
+          color,
+          durationSeconds: seconds,
+          comment
+        };
+        const data = await postJson(POINT_MARK_ENDPOINT, payload);
+        logLine(
+          `[POINT MARK ${data.markSeq ?? "ok"}] session=${payload.sessionId} seq=${payload.pointSeq} ` +
+          `color=${payload.color} sec=${payload.durationSeconds} comment="${payload.comment}"`
+        );
+        setStatus("Метка точки сохранена", "ok");
+        closePointMarkDialog();
+        resetPointMarkForm();
+      } catch (e) {
+        setStatus(`Ошибка сохранения метки: ${e.message}`, "bad");
+        logLine(`[POINT MARK ERR] ${e.message}`);
+      } finally {
+        els.pointMarkSaveBtn.disabled = false;
+      }
     });
   </script>
 </body>
