@@ -18,7 +18,7 @@ from app.config import (
     SESSIONS_QUERY_INDEX_FILE,
     TIMEZONE_NAME,
 )
-from app.models import SessionMeta, RawPoint, SensorEvent
+from app.models import SessionMeta, RawPoint, SensorEvent, PointComment
 from app.storage import (
     ensure_dir,
     write_json,
@@ -75,6 +75,10 @@ def session_sensor_csv_path(session_id: str, session_date: Optional[str] = None)
     return session_dir(session_id, session_date) / "sensor_events.csv"
 
 
+def session_comments_jsonl_path(session_id: str, session_date: Optional[str] = None) -> Path:
+    return session_dir(session_id, session_date) / "comments.jsonl"
+
+
 def session_events_path(session_id: str, session_date: Optional[str] = None) -> Path:
     return session_dir(session_id, session_date) / "events.log"
 
@@ -109,6 +113,7 @@ def _query_index_upsert(meta: Dict[str, Any]) -> None:
         "status": meta.get("status"),
         "point_count": int(meta.get("point_count", 0) or 0),
         "sensor_event_count": int(meta.get("sensor_event_count", 0) or 0),
+        "comment_count": int(meta.get("comment_count", 0) or 0),
     }
     _write_json_atomic(SESSIONS_QUERY_INDEX_FILE, index_payload)
 
@@ -124,6 +129,8 @@ _DEFAULT_SENSOR_STREAMS: Dict[str, bool] = {
     "battery_status": False,
 }
 _META_SCHEMA_VERSION = 2
+_COMMENT_TEXT_MAX_LENGTH = 500
+_COMMENT_DURATION_MAX_SEC = 86400
 
 
 def _write_json_atomic(path: Path, payload: Dict[str, Any]) -> None:
@@ -190,11 +197,13 @@ def create_session(payload: Dict[str, Any]) -> Dict[str, Any]:
         points_file_csv=str(session_csv_path(sid, session_date)),
         sensor_events_file_jsonl=str(session_sensor_jsonl_path(sid, session_date)),
         sensor_events_file_csv=str(session_sensor_csv_path(sid, session_date)),
+        comments_file_jsonl=str(session_comments_jsonl_path(sid, session_date)),
         csv_materialized=False,
         csv_last_exported_at=None,
         events_file=str(session_events_path(sid, session_date)),
         point_count=0,
         sensor_event_count=0,
+        comment_count=0,
         sensor_streams=dict(_DEFAULT_SENSOR_STREAMS),
         device={
             "user_agent": payload.get("userAgent"),
@@ -251,6 +260,14 @@ def normalize_meta(meta: Dict[str, Any]) -> bool:
 
     if "sensor_event_count" not in meta:
         meta["sensor_event_count"] = 0
+        changed = True
+
+    if not meta.get("comments_file_jsonl") and session_id:
+        meta["comments_file_jsonl"] = str(session_comments_jsonl_path(session_id, session_date))
+        changed = True
+
+    if "comment_count" not in meta:
+        meta["comment_count"] = 0
         changed = True
 
     sensor_streams = meta.get("sensor_streams")
@@ -467,6 +484,81 @@ def append_sensor_event(session_id: str, payload: Dict[str, Any]) -> Tuple[Dict[
 
         save_session_meta(meta)
         return meta, event.to_dict()
+
+
+def append_point_comment(session_id: str, payload: Dict[str, Any]) -> Tuple[Dict[str, Any], Dict[str, Any]]:
+    point_seq = _coerce_int(payload.get("pointSeq"))
+    if point_seq is None or point_seq <= 0:
+        raise ValueError("pointSeq must be a positive integer")
+
+    lat = _coerce_float(payload.get("latitude"))
+    lon = _coerce_float(payload.get("longitude"))
+    if lat is None or lon is None:
+        raise ValueError("latitude/longitude required")
+    if not (-90.0 <= lat <= 90.0):
+        raise ValueError("latitude out of range")
+    if not (-180.0 <= lon <= 180.0):
+        raise ValueError("longitude out of range")
+
+    color = str(payload.get("color") or "").strip().lower()
+    if color not in ("red", "green"):
+        raise ValueError("color must be red or green")
+
+    duration_sec = _coerce_int(payload.get("durationSec"))
+    if duration_sec is None or duration_sec < 1:
+        raise ValueError("durationSec must be an integer >= 1")
+    if duration_sec > _COMMENT_DURATION_MAX_SEC:
+        raise ValueError(f"durationSec must be <= {_COMMENT_DURATION_MAX_SEC}")
+
+    comment_text = str(payload.get("commentText") or "").strip()
+    if not comment_text:
+        raise ValueError("commentText must not be empty")
+    if len(comment_text) > _COMMENT_TEXT_MAX_LENGTH:
+        raise ValueError(f"commentText length must be <= {_COMMENT_TEXT_MAX_LENGTH}")
+
+    with _session_lock(session_id):
+        meta = load_session_meta(session_id)
+        if meta["status"] not in ("active", "interrupted"):
+            raise ValueError(f"Session {session_id} is not active")
+
+        comments_path = Path(meta["comments_file_jsonl"])
+        events_path = Path(meta["events_file"])
+
+        comment_seq = int(meta.get("comment_count", 0)) + 1
+        file_max_seq = _scan_max_seq(comments_path, "comment_seq")
+        if file_max_seq is not None and comment_seq <= file_max_seq:
+            _warn_seq_anomaly(session_id, events_path, "comment_seq", comment_seq, file_max_seq)
+            comment_seq = file_max_seq + 1
+
+        comment = PointComment(
+            session_id=session_id,
+            comment_seq=comment_seq,
+            point_seq=point_seq,
+            point_client_timestamp_ms=_coerce_int(payload.get("pointClientTimestampMs")),
+            latitude=lat,
+            longitude=lon,
+            color=color,
+            duration_sec=duration_sec,
+            comment_text=comment_text,
+            client_timestamp_ms=_coerce_int(payload.get("clientTimestampMs") or payload.get("timestampMs")),
+            client_iso_time=payload.get("clientIsoTime") or payload.get("isoTime"),
+            client_local_time=payload.get("clientLocalTime") or payload.get("localTime"),
+            server_received_at=_now_iso(),
+            user_agent=payload.get("userAgent"),
+        )
+
+        append_jsonl(comments_path, comment.to_dict())
+        meta["comment_count"] = comment_seq
+        save_session_meta(meta)
+
+        append_text_line(
+            events_path,
+            (
+                f"{_now_iso()} point_comment_appended session={session_id} "
+                f"comment_seq={comment_seq} point_seq={point_seq} color={color} duration_sec={duration_sec}"
+            ),
+        )
+        return meta, comment.to_dict()
 
 
 def materialize_session_csv(session_id: str) -> Dict[str, Any]:

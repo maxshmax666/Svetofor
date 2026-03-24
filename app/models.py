@@ -14,11 +14,13 @@ class SessionMeta:
     points_file_csv: str
     sensor_events_file_jsonl: str
     sensor_events_file_csv: str
+    comments_file_jsonl: str
     csv_materialized: bool
     csv_last_exported_at: Optional[str]
     events_file: str
     point_count: int
     sensor_event_count: int
+    comment_count: int
     sensor_streams: Dict[str, Any]
     device: Dict[str, Any]
     client: Dict[str, Any]
@@ -75,6 +77,27 @@ class SensorEvent:
     is_charging: Optional[bool]
     is_screen_visible: Optional[bool]
     sample_source: Optional[str]
+    user_agent: Optional[str]
+
+    def to_dict(self) -> Dict[str, Any]:
+        return asdict(self)
+
+
+@dataclass
+class PointComment:
+    session_id: str
+    comment_seq: int
+    point_seq: int
+    point_client_timestamp_ms: Optional[int]
+    latitude: float
+    longitude: float
+    color: str
+    duration_sec: int
+    comment_text: str
+    client_timestamp_ms: Optional[int]
+    client_iso_time: Optional[str]
+    client_local_time: Optional[str]
+    server_received_at: str
     user_agent: Optional[str]
 
     def to_dict(self) -> Dict[str, Any]:
