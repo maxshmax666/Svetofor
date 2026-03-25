@@ -5,6 +5,7 @@ ROOT_DIR="${APP_DIR:-/opt/gps-logger}"
 BRANCH="${BRANCH:-main}"
 RUN_DIR="$ROOT_DIR/run"
 LOCK_FILE="$RUN_DIR/deploy.lock"
+SERVICE_NAME="${SERVICE_NAME:-gps-logger}"
 
 mkdir -p "$RUN_DIR"
 
@@ -37,18 +38,9 @@ fi
 git fetch origin "$BRANCH"
 git pull --ff-only origin "$BRANCH"
 
-if [[ -x "$ROOT_DIR/scripts/stop_gps_logger.sh" ]]; then
-  "$ROOT_DIR/scripts/stop_gps_logger.sh"
-fi
+systemctl restart "$SERVICE_NAME"
+sleep 2
 
-if [[ -x "$ROOT_DIR/scripts/start_gps_logger.sh" ]]; then
-  "$ROOT_DIR/scripts/start_gps_logger.sh"
-fi
-
-if [[ -x "$ROOT_DIR/scripts/healthcheck.sh" ]]; then
-  "$ROOT_DIR/scripts/healthcheck.sh"
-else
-  curl -fsS http://127.0.0.1:18080/health >/dev/null
-fi
+curl -fsS http://127.0.0.1:18080/health >/dev/null
 
 echo "Deploy completed successfully"
