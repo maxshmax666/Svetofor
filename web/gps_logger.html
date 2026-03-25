@@ -252,10 +252,19 @@
       font-size: 19px;
       line-height: 1;
     }
-    .segment-btn[aria-pressed="true"] {
-      background: var(--primary);
-      border-color: var(--primary);
+    .segment-btn[data-color="red"] { border-color: #7e2b2b; color: #ffb3b3; }
+    .segment-btn[data-color="green"] { border-color: #29623c; color: #b0f2c8; }
+    .segment-btn[data-color="red"][aria-pressed="true"] { background: #b43434; border-color: #d14e4e; color: #fff; }
+    .segment-btn[data-color="green"][aria-pressed="true"] { background: #2d8a57; border-color: #3aa56a; color: #fff; }
+    .segment-btn .dot {
+      width: 10px;
+      height: 10px;
+      border-radius: 50%;
+      display: inline-block;
+      margin-right: 8px;
     }
+    .segment-btn[data-color="red"] .dot { background: #ff6262; }
+    .segment-btn[data-color="green"] .dot { background: #49d989; }
     .seconds-grid {
       display: grid;
       grid-template-columns: repeat(5, minmax(0, 1fr));
@@ -279,6 +288,36 @@
       border-color: var(--primary);
       font-weight: 700;
     }
+    .range-wrap { margin-bottom: 10px; }
+    .range-row {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 8px;
+      gap: 12px;
+    }
+    .range-value {
+      min-width: 64px;
+      text-align: right;
+      font-size: 18px;
+      font-weight: 700;
+      color: #c5dbff;
+      font-variant-numeric: tabular-nums;
+    }
+    .range-input {
+      width: 100%;
+      accent-color: var(--primary);
+    }
+    .events-toggle {
+      width: 100%;
+      justify-content: space-between;
+      background: #111622;
+      border: 1px solid var(--border);
+    }
+    .events-toggle[aria-expanded="true"] {
+      border-color: #3a4b66;
+    }
+    .hidden-block { display: none; }
     @media (max-width:520px) {
       .seconds-grid { grid-template-columns: repeat(4, minmax(0, 1fr)); }
       .modal-actions button {
@@ -306,7 +345,6 @@
         <div class="kv"><div class="k">Статус</div><div class="v" id="status">Ожидание</div></div>
         <div class="kv"><div class="k">Session ID</div><div class="v mono" id="sessionId">—</div></div>
         <div class="kv"><div class="k">GPS точек</div><div class="v" id="sentCount">0</div></div>
-        <div class="kv"><div class="k">Sensor events</div><div class="v" id="sensorCount">0</div></div>
         <div class="kv"><div class="k">Последнее client time</div><div class="v" id="lastClientTime">—</div></div>
         <div class="kv"><div class="k">Последнее server time</div><div class="v" id="lastServerTime">—</div></div>
         <div class="kv">
@@ -315,17 +353,17 @@
             <button type="button" class="coord-btn" id="lastCoord" aria-haspopup="dialog">—</button>
           </div>
         </div>
-        <div class="kv"><div class="k">Accuracy / Speed / Heading</div><div class="v" id="lastQuality">—</div></div>
-        <div class="kv"><div class="k">Последний sensor event</div><div class="v" id="lastSensorInfo">—</div></div>
-        <div class="kv"><div class="k">Raw position timestamp</div><div class="v mono" id="lastRawTimestamp">—</div></div>
       </div>
     </div>
 
     <div class="panel">
-      <div class="small" style="margin-bottom:8px;">
-        Последние события:
+      <button type="button" class="btn events-toggle" id="toggleEventsBtn" aria-expanded="false" aria-controls="eventsLogWrap">
+        <span>Последние события (debug)</span>
+        <span id="toggleEventsLabel">Показать</span>
+      </button>
+      <div class="hidden-block" id="eventsLogWrap" style="margin-top:10px;">
+        <div class="logbox" id="logView">Пока пусто.</div>
       </div>
-      <div class="logbox" id="logView">Пока пусто.</div>
     </div>
   </div>
 
@@ -349,14 +387,21 @@
       <div class="modal-field">
         <label>Цвет</label>
         <div class="segment-group" id="colorSegment" role="radiogroup" aria-label="Цвет метки">
-          <button type="button" class="segment-btn" data-color="red" aria-pressed="true">red</button>
-          <button type="button" class="segment-btn" data-color="green" aria-pressed="false">green</button>
+          <button type="button" class="segment-btn" data-color="red" aria-pressed="true"><span class="dot"></span>Красный</button>
+          <button type="button" class="segment-btn" data-color="green" aria-pressed="false"><span class="dot"></span>Зелёный</button>
         </div>
       </div>
 
       <div class="modal-field">
         <label for="markSeconds">Секунды</label>
         <input id="markSeconds" name="markSeconds" class="modal-input" type="number" min="16" max="65" step="1" inputmode="numeric" required hidden />
+        <div class="range-wrap">
+          <div class="range-row">
+            <div class="small">Длительность фазы</div>
+            <div class="range-value"><span id="markSecondsValue">32</span> сек</div>
+          </div>
+          <input id="markSecondsRange" class="range-input" type="range" min="16" max="65" step="1" value="32" aria-label="Длительность в секундах" />
+        </div>
         <div class="seconds-grid" id="secondsGrid" role="listbox" aria-label="Длительность метки в секундах"></div>
       </div>
 
@@ -402,14 +447,13 @@
       status: document.getElementById("status"),
       sessionId: document.getElementById("sessionId"),
       sentCount: document.getElementById("sentCount"),
-      sensorCount: document.getElementById("sensorCount"),
       lastClientTime: document.getElementById("lastClientTime"),
       lastServerTime: document.getElementById("lastServerTime"),
       lastCoord: document.getElementById("lastCoord"),
-      lastQuality: document.getElementById("lastQuality"),
-      lastSensorInfo: document.getElementById("lastSensorInfo"),
-      lastRawTimestamp: document.getElementById("lastRawTimestamp"),
       logView: document.getElementById("logView"),
+      toggleEventsBtn: document.getElementById("toggleEventsBtn"),
+      toggleEventsLabel: document.getElementById("toggleEventsLabel"),
+      eventsLogWrap: document.getElementById("eventsLogWrap"),
       startBtn: document.getElementById("startBtn"),
       stopBtn: document.getElementById("stopBtn"),
       exportBtn: document.getElementById("exportBtn"),
@@ -421,6 +465,8 @@
       pointMarkCancelBtn: document.getElementById("pointMarkCancelBtn"),
       pointMarkSaveBtn: document.getElementById("pointMarkSaveBtn"),
       pointMarkSeconds: document.getElementById("markSeconds"),
+      pointMarkSecondsRange: document.getElementById("markSecondsRange"),
+      pointMarkSecondsValue: document.getElementById("markSecondsValue"),
       pointMarkComment: document.getElementById("markComment"),
       colorSegment: document.getElementById("colorSegment"),
       secondsGrid: document.getElementById("secondsGrid"),
@@ -684,6 +730,8 @@
     function resetPointMarkForm() {
       els.pointMarkForm.reset();
       els.pointMarkSeconds.value = "32";
+      els.pointMarkSecondsRange.value = "32";
+      els.pointMarkSecondsValue.textContent = "32";
       els.pointMarkComment.value = "";
       selectColorButton("red");
       selectSecondsButton(32);
@@ -728,6 +776,8 @@
 
     function selectSecondsButton(value) {
       els.pointMarkSeconds.value = String(value);
+      els.pointMarkSecondsRange.value = String(value);
+      els.pointMarkSecondsValue.textContent = String(value);
       els.secondsGrid.querySelectorAll(".sec-btn").forEach((btn) => {
         const active = Number.parseInt(btn.dataset.seconds || "", 10) === value;
         btn.setAttribute("aria-pressed", active ? "true" : "false");
@@ -823,7 +873,6 @@
       sensorCount = 0;
       els.sessionId.textContent = sessionId;
       els.sentCount.textContent = "0";
-      els.sensorCount.textContent = "0";
       els.exportBtn.href = `/api/export/session/${sessionId}.tar.gz`;
 
       setStatus("Сессия создана, запускаю GPS и датчики...", "ok");
@@ -901,17 +950,10 @@
 
       if (!data) {
         sensorCount += 1;
-        els.sensorCount.textContent = String(sensorCount);
         return;
       }
 
       sensorCount = data.sensorEventCount ?? (sensorCount + 1);
-      els.sensorCount.textContent = String(sensorCount);
-      els.lastSensorInfo.textContent =
-        `${payload.eventType} | ` +
-        `x=${payload.valueX ?? "—"} y=${payload.valueY ?? "—"} z=${payload.valueZ ?? "—"} ` +
-        `a=${payload.alpha ?? "—"} b=${payload.beta ?? "—"} g=${payload.gamma ?? "—"} h=${payload.headingDeg ?? "—"}` +
-        ` q=${payload.quality ?? "—"}`;
 
       logLine(`[SENSOR ${data.eventSeq}] ${payload.eventType} | t=${payload.clientLocalTime}`);
     }
@@ -1156,10 +1198,6 @@
           lon: payload.longitude,
           clientTimestampMs: payload.clientTimestampMs
         };
-        els.lastQuality.textContent =
-          `acc=${payload.accuracyM ?? "—"}м | speed=${payload.speedMps ?? "—"} м/с | heading=${payload.headingDeg ?? "—"}°`;
-        els.lastRawTimestamp.textContent = String(payload.rawPositionTimestampMs ?? "—");
-
         setStatus("RAW GPS точка сохранена", "ok");
         logLine(
           `[POINT ${data.pointSeq}] ${payload.clientLocalTime} | ` +
@@ -1232,6 +1270,14 @@
       closePointMarkDialog();
     });
 
+    els.toggleEventsBtn.addEventListener("click", () => {
+      const expanded = els.toggleEventsBtn.getAttribute("aria-expanded") === "true";
+      const nextExpanded = !expanded;
+      els.toggleEventsBtn.setAttribute("aria-expanded", nextExpanded ? "true" : "false");
+      els.toggleEventsLabel.textContent = nextExpanded ? "Скрыть" : "Показать";
+      els.eventsLogWrap.classList.toggle("hidden-block", !nextExpanded);
+    });
+
     els.pointMarkForm.addEventListener("submit", async (event) => {
       event.preventDefault();
 
@@ -1297,6 +1343,10 @@
     });
 
     initSecondsButtons();
+    els.pointMarkSecondsRange.addEventListener("input", () => {
+      const val = Number.parseInt(els.pointMarkSecondsRange.value, 10);
+      if (Number.isInteger(val)) selectSecondsButton(val);
+    });
     els.colorSegment.querySelectorAll(".segment-btn").forEach((btn) => {
       btn.addEventListener("click", () => {
         selectColorButton(btn.dataset.color || "red");
