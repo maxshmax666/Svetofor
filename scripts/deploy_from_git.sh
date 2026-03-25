@@ -1,45 +1,54 @@
-#!/data/data/com.termux/files/usr/bin/bash
+#!/usr/bin/env bash
 set -euo pipefail
 
-APP_DIR="${APP_DIR:-$HOME/gps-logger}"
+ROOT_DIR="${APP_DIR:-/opt/gps-logger}"
 BRANCH="${BRANCH:-main}"
-LOCK_DIR="${APP_DIR}/run"
-LOCK_FILE="${LOCK_DIR}/deploy.lock"
+RUN_DIR="$ROOT_DIR/run"
+LOCK_FILE="$RUN_DIR/deploy.lock"
 
-mkdir -p "$LOCK_DIR"
+mkdir -p "$RUN_DIR"
 
 exec 9>"$LOCK_FILE"
-if ! flock -n 9; then
-  echo "[ERR] Деплой уже выполняется: $LOCK_FILE"
+flock -n 9 || {
+  echo "Another deploy is already running"
+  exit 1
+}
+
+cd "$ROOT_DIR"
+
+git rev-parse --is-inside-work-tree >/dev/null 2>&1
+
+DIRTY="$(git status --porcelain \
+  --untracked-files=all \
+  -- . \
+  ':(exclude)data/sessions' \
+  ':(exclude)data/exports' \
+  ':(exclude)data/manifests/sessions_index.json' \
+  ':(exclude)data/manifests/sessions_index.jsonl' \
+  ':(exclude)run/deploy.lock'
+)"
+
+if [[ -n "$DIRTY" ]]; then
+  echo "Working tree is dirty (excluding runtime data)."
+  echo "$DIRTY"
   exit 1
 fi
 
-cd "$APP_DIR"
-
-if [ ! -d .git ]; then
-  echo "[ERR] $APP_DIR не является git-репозиторием"
-  exit 1
-fi
-
-CURRENT_BRANCH="$(git rev-parse --abbrev-ref HEAD)"
-if [ "$CURRENT_BRANCH" != "$BRANCH" ]; then
-  echo "[INFO] Переключение ветки: $CURRENT_BRANCH -> $BRANCH"
-  git checkout "$BRANCH"
-fi
-
-if [ -n "$(git status --porcelain)" ]; then
-  echo "[ERR] Есть локальные незакоммиченные изменения. Деплой остановлен."
-  git status --short
-  exit 1
-fi
-
-echo "[INFO] Обновление репозитория ($BRANCH)..."
 git fetch origin "$BRANCH"
 git pull --ff-only origin "$BRANCH"
 
-echo "[INFO] Перезапуск сервиса..."
-./scripts/stop_gps_logger.sh || true
-./scripts/start_gps_logger.sh
-./scripts/healthcheck.sh
+if [[ -x "$ROOT_DIR/scripts/stop_gps_logger.sh" ]]; then
+  "$ROOT_DIR/scripts/stop_gps_logger.sh"
+fi
 
-echo "[OK] Деплой завершен успешно"
+if [[ -x "$ROOT_DIR/scripts/start_gps_logger.sh" ]]; then
+  "$ROOT_DIR/scripts/start_gps_logger.sh"
+fi
+
+if [[ -x "$ROOT_DIR/scripts/healthcheck.sh" ]]; then
+  "$ROOT_DIR/scripts/healthcheck.sh"
+else
+  curl -fsS http://127.0.0.1:18080/health >/dev/null
+fi
+
+echo "Deploy completed successfully"
