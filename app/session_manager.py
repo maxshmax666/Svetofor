@@ -194,6 +194,32 @@ def create_session(payload: Dict[str, Any]) -> Dict[str, Any]:
     sdir = session_dir(sid, session_date)
     ensure_dir(sdir)
 
+    enable_high_accuracy = _coerce_bool(payload.get("enableHighAccuracy"))
+    if enable_high_accuracy is None:
+        enable_high_accuracy = True
+
+    maximum_age_ms = _safe_int(payload.get("maximumAgeMs"), 0)
+    timeout_ms = _safe_int(payload.get("timeoutMs"), 10000)
+    sensor_throttle_ms = _safe_int(payload.get("sensorThrottleMs"), 200)
+
+    maximum_age_ms = max(0, maximum_age_ms)
+    timeout_ms = min(max(1000, timeout_ms), 120000)
+    sensor_throttle_ms = min(max(50, sensor_throttle_ms), 5000)
+
+    timezone = str(payload.get("timezone")).strip() if payload.get("timezone") is not None else TIMEZONE_NAME
+    if not timezone:
+        timezone = TIMEZONE_NAME
+
+    language = str(payload.get("language")).strip() if payload.get("language") is not None else "ru-RU"
+    if not language:
+        language = "ru-RU"
+
+    platform_hint = str(payload.get("platformHint")).strip() if payload.get("platformHint") is not None else "android"
+    if not platform_hint:
+        platform_hint = "android"
+
+    user_agent = str(payload.get("userAgent")).strip() if payload.get("userAgent") is not None else ""
+
     meta = SessionMeta(
         session_id=sid,
         created_at=_now_iso(),
@@ -213,18 +239,18 @@ def create_session(payload: Dict[str, Any]) -> Dict[str, Any]:
         comment_count=0,
         sensor_streams=dict(_DEFAULT_SENSOR_STREAMS),
         device={
-            "user_agent": payload.get("userAgent"),
-            "platform_hint": payload.get("platformHint", "android"),
+            "user_agent": user_agent,
+            "platform_hint": platform_hint,
         },
         client={
-            "timezone": payload.get("timezone", TIMEZONE_NAME),
-            "language": payload.get("language", "ru-RU"),
+            "timezone": timezone,
+            "language": language,
         },
         sampling={
-            "enable_high_accuracy": bool(payload.get("enableHighAccuracy", True)),
-            "maximum_age_ms": int(payload.get("maximumAgeMs", 0)),
-            "timeout_ms": int(payload.get("timeoutMs", 10000)),
-            "sensor_throttle_ms": int(payload.get("sensorThrottleMs", 200)),
+            "enable_high_accuracy": enable_high_accuracy,
+            "maximum_age_ms": maximum_age_ms,
+            "timeout_ms": timeout_ms,
+            "sensor_throttle_ms": sensor_throttle_ms,
         },
         meta_schema_version=_META_SCHEMA_VERSION,
     )
