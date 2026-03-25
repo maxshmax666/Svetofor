@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-APP_DIR="${APP_DIR:-$HOME/gps-logger}"
+APP_DIR="${APP_DIR:-/opt/gps-logger}"
 PID_FILE="$APP_DIR/run/gps_logger.pid"
 
 # shellcheck source=/dev/null
