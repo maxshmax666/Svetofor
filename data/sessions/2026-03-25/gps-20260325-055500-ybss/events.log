@@ -1,0 +1,3 @@
+2026-03-25T05:55:01Z session_started gps-20260325-055500-ybss
+2026-03-25T05:55:23Z point_comment_appended session=gps-20260325-055500-ybss comment_seq=1 point_seq=4 color=red duration_sec=30
+2026-03-25T05:55:28Z session_closed gps-20260325-055500-ybss

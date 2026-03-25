@@ -1,0 +1,143 @@
+{
+  "gps-20260324-174555-z7t1": {
+    "session_id": "gps-20260324-174555-z7t1",
+    "session_date": "2026-03-24",
+    "created_at": "2026-03-24T17:45:55Z",
+    "closed_at": "2026-03-24T17:47:06Z",
+    "status": "closed",
+    "point_count": 11,
+    "sensor_event_count": 2
+  },
+  "gps-20260324-174737-wdbs": {
+    "session_id": "gps-20260324-174737-wdbs",
+    "session_date": "2026-03-24",
+    "created_at": "2026-03-24T17:47:37Z",
+    "closed_at": "2026-03-24T17:48:46Z",
+    "status": "closed",
+    "point_count": 10,
+    "sensor_event_count": 4
+  },
+  "gps-20260324-181159-u3ot": {
+    "session_id": "gps-20260324-181159-u3ot",
+    "session_date": "2026-03-24",
+    "created_at": "2026-03-24T18:11:59Z",
+    "closed_at": null,
+    "status": "active",
+    "point_count": 4,
+    "sensor_event_count": 5
+  },
+  "gps-20260324-181529-glxv": {
+    "session_id": "gps-20260324-181529-glxv",
+    "session_date": "2026-03-24",
+    "created_at": "2026-03-24T18:15:29Z",
+    "closed_at": "2026-03-24T18:25:50Z",
+    "status": "closed",
+    "point_count": 3,
+    "sensor_event_count": 7
+  },
+  "gps-20260324-182201-t6pc": {
+    "session_id": "gps-20260324-182201-t6pc",
+    "session_date": "2026-03-24",
+    "created_at": "2026-03-24T18:22:01Z",
+    "closed_at": "2026-03-24T18:22:45Z",
+    "status": "closed",
+    "point_count": 40,
+    "sensor_event_count": 583
+  },
+  "gps-20260324-182553-b53f": {
+    "session_id": "gps-20260324-182553-b53f",
+    "session_date": "2026-03-24",
+    "created_at": "2026-03-24T18:25:53Z",
+    "closed_at": "2026-03-24T18:29:03Z",
+    "status": "closed",
+    "point_count": 7,
+    "sensor_event_count": 4
+  },
+  "gps-20260324-183128-5bjj": {
+    "session_id": "gps-20260324-183128-5bjj",
+    "session_date": "2026-03-24",
+    "created_at": "2026-03-24T18:31:28Z",
+    "closed_at": "2026-03-24T18:39:54Z",
+    "status": "closed",
+    "point_count": 147,
+    "sensor_event_count": 2073
+  },
+  "gps-20260324-183704-oyha": {
+    "session_id": "gps-20260324-183704-oyha",
+    "session_date": "2026-03-24",
+    "created_at": "2026-03-24T18:37:04Z",
+    "closed_at": null,
+    "status": "active",
+    "point_count": 108,
+    "sensor_event_count": 8
+  },
+  "gps-20260325-023202-922v": {
+    "session_id": "gps-20260325-023202-922v",
+    "session_date": "2026-03-25",
+    "created_at": "2026-03-25T02:32:02Z",
+    "closed_at": "2026-03-25T02:39:16Z",
+    "status": "closed",
+    "point_count": 433,
+    "sensor_event_count": 2
+  },
+  "gps-20260325-033103-bw22": {
+    "session_id": "gps-20260325-033103-bw22",
+    "session_date": "2026-03-25",
+    "created_at": "2026-03-25T03:31:03Z",
+    "closed_at": null,
+    "status": "active",
+    "point_count": 9,
+    "sensor_event_count": 7,
+    "comment_count": 0
+  },
+  "gps-20260325-053927-fezb": {
+    "session_id": "gps-20260325-053927-fezb",
+    "session_date": "2026-03-25",
+    "created_at": "2026-03-25T05:39:27Z",
+    "closed_at": "2026-03-25T05:54:45Z",
+    "status": "closed",
+    "point_count": 87,
+    "sensor_event_count": 18,
+    "comment_count": 4
+  },
+  "gps-20260325-055500-ybss": {
+    "session_id": "gps-20260325-055500-ybss",
+    "session_date": "2026-03-25",
+    "created_at": "2026-03-25T05:55:01Z",
+    "closed_at": "2026-03-25T05:55:28Z",
+    "status": "closed",
+    "point_count": 5,
+    "sensor_event_count": 2,
+    "comment_count": 1
+  },
+  "gps-20260325-060321-pnus": {
+    "session_id": "gps-20260325-060321-pnus",
+    "session_date": "2026-03-25",
+    "created_at": "2026-03-25T06:03:21Z",
+    "closed_at": "2026-03-25T06:05:16Z",
+    "status": "closed",
+    "point_count": 19,
+    "sensor_event_count": 6,
+    "comment_count": 0
+  },
+  "gps-20260325-124115-r9ou": {
+    "session_id": "gps-20260325-124115-r9ou",
+    "session_date": "2026-03-25",
+    "created_at": "2026-03-25T12:41:15Z",
+    "closed_at": null,
+    "status": "active",
+    "point_count": 0,
+    "sensor_event_count": 0,
+    "comment_count": 0
+  },
+  "gps-20260325-124207-igo4": {
+    "session_id": "gps-20260325-124207-igo4",
+    "session_date": "2026-03-25",
+    "created_at": "2026-03-25T12:42:07Z",
+    "closed_at": null,
+    "status": "active",
+    "point_count": 0,
+    "sensor_event_count": 0,
+    "comment_count": 0
+  }
+}

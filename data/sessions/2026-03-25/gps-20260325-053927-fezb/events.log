@@ -1,0 +1,14 @@
+2026-03-25T05:39:27Z session_started gps-20260325-053927-fezb
+2026-03-25T05:39:42Z point_comment_appended session=gps-20260325-053927-fezb comment_seq=1 point_seq=3 color=green duration_sec=26
+2026-03-25T05:40:31Z WARN event_seq anomaly for session=gps-20260325-053927-fezb: calculated_seq=5 is not unique (known_max=5)
+2026-03-25T05:40:41Z csv_materialized points_rows=7 sensor_rows=7
+2026-03-25T05:40:44Z WARN event_seq anomaly for session=gps-20260325-053927-fezb: calculated_seq=7 is not unique (known_max=7)
+2026-03-25T05:41:37Z WARN event_seq anomaly for session=gps-20260325-053927-fezb: calculated_seq=10 is not unique (known_max=10)
+2026-03-25T05:41:42Z point_comment_appended session=gps-20260325-053927-fezb comment_seq=2 point_seq=9 color=green duration_sec=30
+2026-03-25T05:47:41Z WARN point_seq anomaly for session=gps-20260325-053927-fezb: calculated_seq=11 is not unique (known_max=11)
+2026-03-25T05:51:29Z point_comment_appended session=gps-20260325-053927-fezb comment_seq=3 point_seq=44 color=red duration_sec=26
+2026-03-25T05:51:32Z WARN point_seq anomaly for session=gps-20260325-053927-fezb: calculated_seq=48 is not unique (known_max=48)
+2026-03-25T05:51:34Z WARN point_seq anomaly for session=gps-20260325-053927-fezb: calculated_seq=50 is not unique (known_max=50)
+2026-03-25T05:51:40Z WARN point_seq anomaly for session=gps-20260325-053927-fezb: calculated_seq=53 is not unique (known_max=53)
+2026-03-25T05:54:28Z point_comment_appended session=gps-20260325-053927-fezb comment_seq=4 point_seq=84 color=green duration_sec=25
+2026-03-25T05:54:45Z session_closed gps-20260325-053927-fezb
