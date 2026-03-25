@@ -23,6 +23,28 @@ Tail по сессии:
   http://127.0.0.1:18080
 
 
+Автодеплой после merge PR в main (GitHub Actions)
+
+- Workflow: `.github/workflows/deploy-on-main.yml`
+- Триггер: любой `push` в `main` (включая merge Pull Request)
+- На сервере выполняется: `./scripts/deploy_from_git.sh`
+- Скрипт деплоя:
+  - берёт lock (`run/deploy.lock`);
+  - делает `git fetch` + `git pull --ff-only` по ветке `main`;
+  - останавливает/стартует сервер;
+  - проверяет `/health`.
+
+Требуемые GitHub Secrets:
+- `DEPLOY_HOST` — хост сервера
+- `DEPLOY_USER` — SSH-пользователь
+- `DEPLOY_SSH_KEY` — приватный ключ (PEM/OpenSSH)
+- `DEPLOY_PORT` — порт SSH (обычно `22`, опционально)
+
+Важно:
+- Если в рабочей директории сервера есть незакоммиченные изменения, деплой завершится ошибкой (защита от случайной потери данных).
+- Убедитесь, что `scripts/deploy_from_git.sh` исполняемый: `chmod +x scripts/deploy_from_git.sh`
+
+
 Миграция meta.json (backward-compatible)
 
 - Текущая схема метаданных: `meta_schema_version=2`.
