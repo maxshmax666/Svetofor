@@ -436,12 +436,16 @@
     const OUTBOX_STORE_NAME = "requests";
     const OUTBOX_SYNC_TAG = "gps-outbox-sync";
     const OUTBOX_MAX_ITEMS = 5000;
+    const SESSION_STATE_KEY = "gps-logger-active-session-v1";
+    const BACKGROUND_FLUSH_INTERVAL_MS = 15000;
 
     const SENSOR_THROTTLE_MS = 200;
     let lastAccelAt = 0;
     let lastGyroAt = 0;
     let lastOrientAt = 0;
     let lastBatteryAt = 0;
+    let isSessionStarting = false;
+    let outboxFlushIntervalId = null;
 
     const els = {
       status: document.getElementById("status"),
@@ -727,6 +731,35 @@
       });
     }
 
+    function persistSessionState() {
+      if (!sessionId) return;
+      const state = {
+        sessionId,
+        sentCount,
+        sensorCount,
+        updatedAt: Date.now()
+      };
+      localStorage.setItem(SESSION_STATE_KEY, JSON.stringify(state));
+    }
+
+    function clearPersistedSessionState() {
+      localStorage.removeItem(SESSION_STATE_KEY);
+    }
+
+    function readPersistedSessionState() {
+      try {
+        const raw = localStorage.getItem(SESSION_STATE_KEY);
+        if (!raw) return null;
+        const parsed = JSON.parse(raw);
+        if (!parsed || typeof parsed.sessionId !== "string" || !parsed.sessionId.trim()) {
+          return null;
+        }
+        return parsed;
+      } catch {
+        return null;
+      }
+    }
+
     function resetPointMarkForm() {
       els.pointMarkForm.reset();
       els.pointMarkSeconds.value = "32";
@@ -849,56 +882,74 @@
       }
     }
 
-    async function startSession() {
-      if (sessionId) {
-        setStatus("Сессия уже активна", "warn");
-        return;
-      }
-
-      const payload = {
-        userAgent: navigator.userAgent,
-        platformHint: "android",
-        timezone: Intl.DateTimeFormat().resolvedOptions().timeZone || "unknown",
-        language: navigator.language || "unknown",
-        enableHighAccuracy: true,
-        maximumAgeMs: 0,
-        timeoutMs: 10000,
-        sensorThrottleMs: SENSOR_THROTTLE_MS
-      };
-
-      const data = await postJson("/api/session/start", payload);
-
-      sessionId = data.session.session_id;
-      sentCount = 0;
-      sensorCount = 0;
+    function applySessionUi(meta) {
+      sessionId = meta.session_id;
+      sentCount = Number.isFinite(meta.point_count) ? meta.point_count : 0;
+      sensorCount = Number.isFinite(meta.sensor_event_count) ? meta.sensor_event_count : 0;
       els.sessionId.textContent = sessionId;
-      els.sentCount.textContent = "0";
+      els.sentCount.textContent = String(sentCount);
       els.exportBtn.href = `/api/export/session/${sessionId}.tar.gz`;
+      persistSessionState();
+    }
 
-      setStatus("Сессия создана, запускаю GPS и датчики...", "ok");
-      logLine(`[SESSION START] ${sessionId}`);
-
+    async function activateRealtimeCapture() {
       if (!navigator.geolocation) {
         throw new Error("Geolocation не поддерживается");
       }
 
+      if (watchId != null) {
+        navigator.geolocation.clearWatch(watchId);
+      }
+
       await ensureIOSPermissions();
       await requestWakeLock();
-
       bindSensorListeners();
-
-      watchId = navigator.geolocation.watchPosition(
-        onPosition,
-        onPositionError,
-        {
-          enableHighAccuracy: true,
-          maximumAge: 0,
-          timeout: 10000
-        }
-      );
-
+      watchId = navigator.geolocation.watchPosition(onPosition, onPositionError, {
+        enableHighAccuracy: true,
+        maximumAge: 0,
+        timeout: 10000
+      });
       await emitBatteryStatus("battery_status");
       await emitVisibilityChange();
+    }
+
+    async function startSession({ autoStart = false } = {}) {
+      if (sessionId || isSessionStarting) {
+        if (!autoStart) setStatus("Сессия уже активна", "warn");
+        return;
+      }
+
+      isSessionStarting = true;
+      try {
+        const payload = {
+          userAgent: navigator.userAgent,
+          platformHint: "android",
+          timezone: Intl.DateTimeFormat().resolvedOptions().timeZone || "unknown",
+          language: navigator.language || "unknown",
+          enableHighAccuracy: true,
+          maximumAgeMs: 0,
+          timeoutMs: 10000,
+          sensorThrottleMs: SENSOR_THROTTLE_MS
+        };
+
+        const data = await postJson("/api/session/start", payload);
+        applySessionUi(data.session || {});
+        setStatus("Сессия создана, запускаю GPS и датчики...", "ok");
+        logLine(`[SESSION START] ${sessionId}${autoStart ? " | mode=autostart" : ""}`);
+        await activateRealtimeCapture();
+      } finally {
+        isSessionStarting = false;
+      }
+    }
+
+    async function resumeSession(meta) {
+      if (!meta || !meta.session_id) return false;
+      if (meta.status && meta.status !== "active") return false;
+      applySessionUi(meta);
+      await activateRealtimeCapture();
+      setStatus("Сессия восстановлена после перезапуска приложения", "ok");
+      logLine(`[SESSION RESUME] ${sessionId}`);
+      return true;
     }
 
     async function stopSession() {
@@ -923,6 +974,7 @@
       sessionId = null;
       lastPointSnapshot = null;
       els.sessionId.textContent = "—";
+      clearPersistedSessionState();
     }
 
     async function postSensorEvent(payload) {
@@ -950,10 +1002,12 @@
 
       if (!data) {
         sensorCount += 1;
+        persistSessionState();
         return;
       }
 
       sensorCount = data.sensorEventCount ?? (sensorCount + 1);
+      persistSessionState();
 
       logLine(`[SENSOR ${data.eventSeq}] ${payload.eventType} | t=${payload.clientLocalTime}`);
     }
@@ -1174,6 +1228,7 @@
         if (!data) {
           sentCount += 1;
           els.sentCount.textContent = String(sentCount);
+          persistSessionState();
           lastPointSnapshot = {
             sessionId,
             pointSeq: null,
@@ -1188,6 +1243,7 @@
 
         sentCount = data.pointCount ?? (sentCount + 1);
         els.sentCount.textContent = String(sentCount);
+        persistSessionState();
         els.lastClientTime.textContent = `${payload.clientLocalTime} | ${payload.clientIsoTime}`;
         els.lastServerTime.textContent = new Date().toISOString();
         els.lastCoord.textContent = `${Number(payload.latitude).toFixed(6)}, ${Number(payload.longitude).toFixed(6)}`;
@@ -1215,6 +1271,35 @@
       logLine(`[GPS ERR] ${err.code} ${err.message}`);
     }
 
+    async function bootstrapSession() {
+      const persisted = readPersistedSessionState();
+      if (persisted?.sessionId) {
+        try {
+          const state = await fetch(`/api/session/${encodeURIComponent(persisted.sessionId)}`, {
+            cache: "no-store"
+          });
+          const payload = await state.json();
+          if (state.ok && payload?.ok && payload.session?.status === "active") {
+            const resumed = await resumeSession(payload.session);
+            if (resumed) return;
+          }
+        } catch (e) {
+          logLine(`[SESSION RESUME WARN] ${e.message}`);
+        }
+        clearPersistedSessionState();
+      }
+
+      await startSession({ autoStart: true });
+    }
+
+    function ensureBackgroundFlushLoop() {
+      if (outboxFlushIntervalId != null) return;
+      outboxFlushIntervalId = window.setInterval(() => {
+        flushOutboxInPage(100).catch(() => {});
+        registerOutboxSync().catch(() => {});
+      }, BACKGROUND_FLUSH_INTERVAL_MS);
+    }
+
     document.addEventListener("visibilitychange", async () => {
       if (document.visibilityState === "visible") {
         await requestWakeLock();
@@ -1228,17 +1313,22 @@
       });
     });
 
-    window.addEventListener("beforeunload", async () => {
+    window.addEventListener("pagehide", () => {
       if (!sessionId) return;
-      try {
-        navigator.sendBeacon(
-          "/api/session/stop",
-          new Blob([JSON.stringify({ sessionId })], { type: "application/json" })
-        );
-      } catch {}
+      persistSessionState();
     });
 
-    registerServiceWorker().then(() => flushOutboxInPage(100)).catch(() => {});
+    registerServiceWorker().then(async () => {
+      await flushOutboxInPage(100);
+      ensureBackgroundFlushLoop();
+      await bootstrapSession();
+    }).catch((e) => {
+      logLine(`[SW INIT WARN] ${e.message}`);
+      bootstrapSession().catch((bootstrapErr) => {
+        setStatus(`Ошибка автостарта: ${bootstrapErr.message}`, "bad");
+        logLine(`[BOOTSTRAP ERR] ${bootstrapErr.message}`);
+      });
+    });
     renderTrafficWidget();
 
     els.startBtn.addEventListener("click", () => {
