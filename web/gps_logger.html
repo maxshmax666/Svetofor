@@ -318,6 +318,14 @@
       border-color: #3a4b66;
     }
     .hidden-block { display: none; }
+    .video-preview {
+      width: 100%;
+      border-radius: 12px;
+      border: 1px solid var(--border);
+      background: #05070b;
+      max-height: 280px;
+      object-fit: cover;
+    }
     @media (max-width:520px) {
       .seconds-grid { grid-template-columns: repeat(4, minmax(0, 1fr)); }
       .modal-actions button {
@@ -338,6 +346,8 @@
       <div class="controls">
         <button class="primary" id="startBtn">Старт сессии</button>
         <button class="warn" id="stopBtn">Стоп сессии</button>
+        <button class="btn" id="videoStartBtn">Старт видео</button>
+        <button class="btn" id="videoStopBtn">Стоп видео</button>
         <a class="btn good" id="exportBtn" href="#" target="_blank">Экспорт сессии</a>
       </div>
 
@@ -347,12 +357,17 @@
         <div class="kv"><div class="k">GPS точек</div><div class="v" id="sentCount">0</div></div>
         <div class="kv"><div class="k">Последнее client time</div><div class="v" id="lastClientTime">—</div></div>
         <div class="kv"><div class="k">Последнее server time</div><div class="v" id="lastServerTime">—</div></div>
+        <div class="kv"><div class="k">Видео</div><div class="v" id="videoStatus">Не активно</div></div>
+        <div class="kv"><div class="k">Последний видеофайл</div><div class="v mono" id="videoFileMeta">—</div></div>
         <div class="kv">
           <div class="k">Последняя координата</div>
           <div class="v">
             <button type="button" class="coord-btn" id="lastCoord" aria-haspopup="dialog">—</button>
           </div>
         </div>
+      </div>
+      <div style="margin-top:10px;">
+        <video id="videoPreview" class="video-preview" playsinline muted autoplay></video>
       </div>
     </div>
 
@@ -427,6 +442,12 @@
     let trafficOutBytes = 0;
     let trafficInBytes = 0;
     let lastPointSnapshot = null;
+    let videoStream = null;
+    let mediaRecorder = null;
+    let videoMimeType = "";
+    let videoStartedAtMs = null;
+    let pendingVideoChunks = [];
+    let isStoppingVideo = false;
 
     const POINT_MARK_ENDPOINT = "/api/point-comment";
     const MARK_DURATION_MIN = 16;
@@ -440,6 +461,7 @@
     const BACKGROUND_FLUSH_INTERVAL_MS = 15000;
 
     const SENSOR_THROTTLE_MS = 200;
+    const VIDEO_CHUNK_MS = 5000;
     let lastAccelAt = 0;
     let lastGyroAt = 0;
     let lastOrientAt = 0;
@@ -460,7 +482,12 @@
       eventsLogWrap: document.getElementById("eventsLogWrap"),
       startBtn: document.getElementById("startBtn"),
       stopBtn: document.getElementById("stopBtn"),
+      videoStartBtn: document.getElementById("videoStartBtn"),
+      videoStopBtn: document.getElementById("videoStopBtn"),
       exportBtn: document.getElementById("exportBtn"),
+      videoStatus: document.getElementById("videoStatus"),
+      videoFileMeta: document.getElementById("videoFileMeta"),
+      videoPreview: document.getElementById("videoPreview"),
       trafficOut: document.getElementById("trafficOut"),
       trafficIn: document.getElementById("trafficIn"),
       pointMarkDialog: document.getElementById("pointMarkDialog"),
@@ -505,6 +532,164 @@
       if (Number.isFinite(outBytes) && outBytes > 0) trafficOutBytes += outBytes;
       if (Number.isFinite(inBytes) && inBytes > 0) trafficInBytes += inBytes;
       renderTrafficWidget();
+    }
+
+    function canRecordVideo() {
+      return !!(navigator.mediaDevices?.getUserMedia && window.MediaRecorder);
+    }
+
+    function chooseVideoMimeType() {
+      if (!window.MediaRecorder || typeof MediaRecorder.isTypeSupported !== "function") {
+        return "";
+      }
+      const candidates = [
+        "video/webm;codecs=vp9",
+        "video/webm;codecs=vp8",
+        "video/webm",
+        "video/mp4"
+      ];
+      for (const mime of candidates) {
+        if (MediaRecorder.isTypeSupported(mime)) return mime;
+      }
+      return "";
+    }
+
+    function updateVideoUi() {
+      const recording = !!mediaRecorder && mediaRecorder.state === "recording";
+      els.videoStartBtn.disabled = !sessionId || !canRecordVideo() || recording;
+      els.videoStopBtn.disabled = !recording || isStoppingVideo;
+      els.videoStatus.textContent = recording
+        ? `Запись идёт (${videoMimeType || "default"})`
+        : "Не активно";
+    }
+
+    function buildVideoFilename({ session, startedAtMs, stoppedAtMs, extension }) {
+      const startIso = new Date(startedAtMs).toISOString().replace(/[:.]/g, "-");
+      const stopIso = new Date(stoppedAtMs).toISOString().replace(/[:.]/g, "-");
+      return `traffic_${session}_${startIso}_${stopIso}.${extension}`;
+    }
+
+    function inferVideoExtension(mimeType) {
+      if (!mimeType) return "webm";
+      if (mimeType.includes("mp4")) return "mp4";
+      return "webm";
+    }
+
+    function saveBlobToPhone(blob, filename) {
+      const blobUrl = URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      link.href = blobUrl;
+      link.download = filename;
+      link.rel = "noopener";
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      window.setTimeout(() => URL.revokeObjectURL(blobUrl), 30000);
+    }
+
+    function stopVideoStream() {
+      if (videoStream) {
+        videoStream.getTracks().forEach((track) => track.stop());
+      }
+      videoStream = null;
+      if (els.videoPreview) {
+        els.videoPreview.srcObject = null;
+      }
+    }
+
+    async function startVideoRecording() {
+      if (!sessionId) {
+        setStatus("Сначала запустите сессию, потом включайте видео", "warn");
+        return;
+      }
+      if (!canRecordVideo()) {
+        setStatus("MediaRecorder/getUserMedia не поддерживаются на этом устройстве", "bad");
+        return;
+      }
+      if (mediaRecorder && mediaRecorder.state === "recording") {
+        setStatus("Видеозапись уже запущена", "warn");
+        return;
+      }
+
+      videoMimeType = chooseVideoMimeType();
+      const stream = await navigator.mediaDevices.getUserMedia({
+        video: {
+          facingMode: { ideal: "environment" },
+          width: { ideal: 1280 },
+          height: { ideal: 720 },
+          frameRate: { ideal: 30, max: 30 }
+        },
+        audio: false
+      });
+      videoStream = stream;
+      els.videoPreview.srcObject = stream;
+      els.videoPreview.play().catch(() => {});
+
+      pendingVideoChunks = [];
+      videoStartedAtMs = Date.now();
+
+      const recorder = videoMimeType ? new MediaRecorder(stream, { mimeType: videoMimeType }) : new MediaRecorder(stream);
+      mediaRecorder = recorder;
+      recorder.ondataavailable = (event) => {
+        if (event.data && event.data.size > 0) {
+          pendingVideoChunks.push(event.data);
+        }
+      };
+      recorder.onerror = (event) => {
+        const errMessage = event?.error?.message || "ошибка записи видео";
+        logLine(`[VIDEO ERR] ${errMessage}`);
+        setStatus(`Ошибка видеозаписи: ${errMessage}`, "bad");
+      };
+      recorder.start(VIDEO_CHUNK_MS);
+      logLine(`[VIDEO START] session=${sessionId}`);
+      setStatus("Видеозапись запущена (локально на телефон)", "ok");
+      updateVideoUi();
+    }
+
+    async function stopVideoRecording(reason = "manual") {
+      if (!mediaRecorder || mediaRecorder.state !== "recording") {
+        updateVideoUi();
+        return;
+      }
+      if (isStoppingVideo) return;
+      isStoppingVideo = true;
+      updateVideoUi();
+
+      const startedAtMs = videoStartedAtMs || Date.now();
+      const stopAtMs = Date.now();
+      const currentSession = sessionId || "no_session";
+      const stopPromise = new Promise((resolve) => {
+        mediaRecorder.onstop = () => {
+          try {
+            const mime = mediaRecorder.mimeType || videoMimeType || "video/webm";
+            const blob = new Blob(pendingVideoChunks, { type: mime });
+            const filename = buildVideoFilename({
+              session: currentSession,
+              startedAtMs,
+              stoppedAtMs: stopAtMs,
+              extension: inferVideoExtension(mime)
+            });
+            saveBlobToPhone(blob, filename);
+            els.videoFileMeta.textContent = `${filename} (${formatBytes(blob.size)})`;
+            logLine(`[VIDEO SAVED] reason=${reason} file=${filename} size=${formatBytes(blob.size)}`);
+            setStatus("Видеофайл автоматически сохранён в Downloads", "ok");
+          } catch (e) {
+            logLine(`[VIDEO SAVE ERR] ${e.message}`);
+            setStatus(`Ошибка сохранения видео: ${e.message}`, "bad");
+          } finally {
+            mediaRecorder = null;
+            videoStartedAtMs = null;
+            pendingVideoChunks = [];
+            isStoppingVideo = false;
+            stopVideoStream();
+            updateVideoUi();
+            resolve();
+          }
+        };
+      });
+
+      mediaRecorder.stop();
+      await stopPromise;
     }
 
     async function registerServiceWorker() {
@@ -958,6 +1143,8 @@
         return;
       }
 
+      await stopVideoRecording("session_stop");
+
       unbindSensorListeners();
 
       if (watchId != null) {
@@ -975,6 +1162,7 @@
       lastPointSnapshot = null;
       els.sessionId.textContent = "—";
       clearPersistedSessionState();
+      updateVideoUi();
     }
 
     async function postSensorEvent(payload) {
@@ -1316,6 +1504,9 @@
     window.addEventListener("pagehide", () => {
       if (!sessionId) return;
       persistSessionState();
+      if (mediaRecorder && mediaRecorder.state === "recording") {
+        stopVideoRecording("pagehide").catch(() => {});
+      }
     });
 
     registerServiceWorker().then(async () => {
@@ -1342,6 +1533,24 @@
       stopSession().catch((e) => {
         setStatus(`Ошибка остановки: ${e.message}`, "bad");
         logLine(`[STOP ERR] ${e.message}`);
+      });
+    });
+
+    els.videoStartBtn.addEventListener("click", () => {
+      startVideoRecording().catch((e) => {
+        setStatus(`Ошибка старта видео: ${e.message}`, "bad");
+        logLine(`[VIDEO START ERR] ${e.message}`);
+        stopVideoStream();
+        mediaRecorder = null;
+        pendingVideoChunks = [];
+        updateVideoUi();
+      });
+    });
+
+    els.videoStopBtn.addEventListener("click", () => {
+      stopVideoRecording("manual").catch((e) => {
+        setStatus(`Ошибка остановки видео: ${e.message}`, "bad");
+        logLine(`[VIDEO STOP ERR] ${e.message}`);
       });
     });
 
@@ -1443,6 +1652,7 @@
       });
     });
     resetPointMarkForm();
+    updateVideoUi();
   </script>
 </body>
 </html>
