@@ -55,6 +55,25 @@
       gap:10px;
       margin-bottom:14px;
     }
+    .primary-controls {
+      display: flex;
+      gap: 10px;
+      margin-bottom: 10px;
+    }
+    .secondary-controls {
+      border: 1px dashed var(--border);
+      border-radius: 12px;
+      padding: 10px;
+      margin-bottom: 12px;
+      background: rgba(31, 41, 58, 0.24);
+    }
+    .secondary-controls summary {
+      color: var(--muted);
+      cursor: pointer;
+      user-select: none;
+      font-size: 13px;
+      margin-bottom: 10px;
+    }
     button, a.btn {
       border:0;
       border-radius:12px;
@@ -305,13 +324,20 @@
     </div>
 
     <div class="panel">
-      <div class="controls">
-        <button class="primary" id="startBtn">Старт сессии</button>
-        <button class="warn" id="stopBtn">Стоп сессии</button>
-        <button class="btn" id="videoStartBtn">Старт видео</button>
-        <button class="btn" id="videoStopBtn">Стоп видео</button>
-        <a class="btn good" id="exportBtn" href="#" target="_blank">Экспорт сессии</a>
+      <div class="primary-controls">
+        <button class="primary" id="sessionToggleBtn">Начать смену</button>
       </div>
+
+      <details class="secondary-controls" id="advancedControls">
+        <summary>Доп. действия (видео, экспорт, сервис)</summary>
+        <div class="controls">
+          <button id="startBtn">Старт сессии</button>
+          <button class="warn" id="stopBtn">Стоп сессии</button>
+          <button id="videoStartBtn">Старт видео</button>
+          <button id="videoStopBtn">Стоп видео</button>
+          <a class="btn good" id="exportBtn" href="#" target="_blank">Экспорт сессии</a>
+        </div>
+      </details>
 
       <div class="grid">
         <div class="kv"><div class="k">Статус</div><div class="v" id="status">Ожидание</div></div>
@@ -432,6 +458,7 @@
       logView: document.getElementById("logView"),
       startBtn: document.getElementById("startBtn"),
       stopBtn: document.getElementById("stopBtn"),
+      sessionToggleBtn: document.getElementById("sessionToggleBtn"),
       videoStartBtn: document.getElementById("videoStartBtn"),
       videoStopBtn: document.getElementById("videoStopBtn"),
       exportBtn: document.getElementById("exportBtn"),
@@ -452,7 +479,7 @@
     };
 
     function canRecordVideo() {
-      return !!(navigator.mediaDevices?.getUserMedia && window.MediaRecorder);
+      return !!(window.isSecureContext && navigator.mediaDevices?.getUserMedia && window.MediaRecorder);
     }
 
     function chooseVideoMimeType() {
@@ -473,11 +500,17 @@
 
     function updateVideoUi() {
       const recording = !!mediaRecorder && mediaRecorder.state === "recording";
-      els.videoStartBtn.disabled = !sessionId || !canRecordVideo() || recording;
+      const sessionActive = Boolean(sessionId);
+      els.videoStartBtn.disabled = !sessionActive || !canRecordVideo() || recording;
       els.videoStopBtn.disabled = !recording || isStoppingVideo;
       els.videoStatus.textContent = recording
         ? `Запись идёт (${videoMimeType || "default"})`
         : "Не активно";
+      if (els.sessionToggleBtn) {
+        els.sessionToggleBtn.textContent = sessionActive ? "Завершить смену" : "Начать смену";
+        els.sessionToggleBtn.classList.toggle("warn", sessionActive);
+        els.sessionToggleBtn.classList.toggle("primary", !sessionActive);
+      }
     }
 
     function buildVideoFilename({ session, startedAtMs, stoppedAtMs, extension }) {
@@ -529,15 +562,21 @@
       }
 
       videoMimeType = chooseVideoMimeType();
-      const stream = await navigator.mediaDevices.getUserMedia({
-        video: {
-          facingMode: { ideal: "environment" },
-          width: { ideal: 1280 },
-          height: { ideal: 720 },
-          frameRate: { ideal: 30, max: 30 }
-        },
-        audio: false
-      });
+      let stream = null;
+      try {
+        stream = await navigator.mediaDevices.getUserMedia({
+          video: {
+            facingMode: { ideal: "environment" },
+            width: { ideal: 1280 },
+            height: { ideal: 720 },
+            frameRate: { ideal: 30, max: 30 }
+          },
+          audio: false
+        });
+      } catch (primaryErr) {
+        logLine(`[VIDEO CAMERA WARN] ${primaryErr.message}`);
+        stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: false });
+      }
       videoStream = stream;
       els.videoPreview.srcObject = stream;
       els.videoPreview.play().catch(() => {});
@@ -1444,6 +1483,15 @@
       bootstrapSession().catch((bootstrapErr) => {
         setStatus(`Ошибка автостарта: ${bootstrapErr.message}`, "bad");
         logLine(`[BOOTSTRAP ERR] ${bootstrapErr.message}`);
+      });
+    });
+
+
+    els.sessionToggleBtn.addEventListener("click", () => {
+      const action = sessionId ? stopSession() : startSession();
+      action.catch((e) => {
+        setStatus(`Ошибка управления сессией: ${e.message}`, "bad");
+        logLine(`[SESSION TOGGLE ERR] ${e.message}`);
       });
     });
 
