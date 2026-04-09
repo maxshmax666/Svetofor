@@ -482,6 +482,22 @@
       return !!(window.isSecureContext && navigator.mediaDevices?.getUserMedia && window.MediaRecorder);
     }
 
+    function getVideoUnavailableReason(sessionActive) {
+      if (!window.isSecureContext) {
+        return "Камера доступна только в защищённом контексте (HTTPS или localhost)";
+      }
+      if (!navigator.mediaDevices?.getUserMedia) {
+        return "Браузер не поддерживает getUserMedia (камера)";
+      }
+      if (!window.MediaRecorder) {
+        return "Браузер не поддерживает MediaRecorder";
+      }
+      if (!sessionActive) {
+        return "Сначала запустите смену, затем включайте запись";
+      }
+      return "";
+    }
+
     function chooseVideoMimeType() {
       if (!window.MediaRecorder || typeof MediaRecorder.isTypeSupported !== "function") {
         return "";
@@ -501,11 +517,16 @@
     function updateVideoUi() {
       const recording = !!mediaRecorder && mediaRecorder.state === "recording";
       const sessionActive = Boolean(sessionId);
-      els.videoStartBtn.disabled = !sessionActive || !canRecordVideo() || recording;
+      const unavailableReason = getVideoUnavailableReason(sessionActive);
+      els.videoStartBtn.disabled = Boolean(unavailableReason) || recording;
       els.videoStopBtn.disabled = !recording || isStoppingVideo;
+      els.videoStartBtn.title = unavailableReason || "";
+      els.videoStopBtn.title = (!recording && !isStoppingVideo) ? "Нет активной видеозаписи" : "";
       els.videoStatus.textContent = recording
         ? `Запись идёт (${videoMimeType || "default"})`
-        : "Не активно";
+        : unavailableReason
+          ? `Не активно: ${unavailableReason}`
+          : "Не активно";
       if (els.sessionToggleBtn) {
         els.sessionToggleBtn.textContent = sessionActive ? "Завершить смену" : "Начать смену";
         els.sessionToggleBtn.classList.toggle("warn", sessionActive);
