@@ -5,6 +5,7 @@ import math
 import random
 import string
 import threading
+import uuid
 from datetime import datetime
 from contextlib import contextmanager
 from pathlib import Path
@@ -91,36 +92,38 @@ def _manifest_append(meta: SessionMeta) -> None:
 
 def _query_index_upsert(meta: Dict[str, Any]) -> None:
     """Upsert query index entry by session_id (JSON map for cheap updates)."""
-    ensure_dir(SESSIONS_QUERY_INDEX_FILE.parent)
-    index_payload: Dict[str, Dict[str, Any]] = {}
-    if SESSIONS_QUERY_INDEX_FILE.exists():
-        try:
-            current = read_json(SESSIONS_QUERY_INDEX_FILE)
-            if isinstance(current, dict):
-                index_payload = current
-        except Exception:
-            index_payload = {}
+    with _QUERY_INDEX_LOCK:
+        ensure_dir(SESSIONS_QUERY_INDEX_FILE.parent)
+        index_payload: Dict[str, Dict[str, Any]] = {}
+        if SESSIONS_QUERY_INDEX_FILE.exists():
+            try:
+                current = read_json(SESSIONS_QUERY_INDEX_FILE)
+                if isinstance(current, dict):
+                    index_payload = current
+            except Exception:
+                index_payload = {}
 
-    session_id = str(meta.get("session_id", "")).strip()
-    if not session_id:
-        return
+        session_id = str(meta.get("session_id", "")).strip()
+        if not session_id:
+            return
 
-    index_payload[session_id] = {
-        "session_id": session_id,
-        "session_date": meta.get("session_date"),
-        "created_at": meta.get("created_at"),
-        "closed_at": meta.get("closed_at"),
-        "status": meta.get("status"),
-        "point_count": _safe_int(meta.get("point_count"), 0),
-        "sensor_event_count": _safe_int(meta.get("sensor_event_count"), 0),
-        "comment_count": _safe_int(meta.get("comment_count"), 0),
-    }
-    _write_json_atomic(SESSIONS_QUERY_INDEX_FILE, index_payload)
+        index_payload[session_id] = {
+            "session_id": session_id,
+            "session_date": meta.get("session_date"),
+            "created_at": meta.get("created_at"),
+            "closed_at": meta.get("closed_at"),
+            "status": meta.get("status"),
+            "point_count": _safe_int(meta.get("point_count"), 0),
+            "sensor_event_count": _safe_int(meta.get("sensor_event_count"), 0),
+            "comment_count": _safe_int(meta.get("comment_count"), 0),
+        }
+        _write_json_atomic(SESSIONS_QUERY_INDEX_FILE, index_payload)
 
 
 LOGGER = logging.getLogger(__name__)
 _SESSION_LOCKS: Dict[str, threading.Lock] = {}
 _SESSION_LOCKS_GUARD = threading.Lock()
+_QUERY_INDEX_LOCK = threading.Lock()
 _DEFAULT_SENSOR_STREAMS: Dict[str, bool] = {
     "accelerometer": False,
     "gyroscope": False,
@@ -136,7 +139,7 @@ _COMMENT_DURATION_MAX_SEC = 86400
 def _write_json_atomic(path: Path, payload: Dict[str, Any]) -> None:
     """Write JSON payload atomically via temp file + rename."""
     ensure_dir(path.parent)
-    tmp_path = path.with_suffix(f"{path.suffix}.tmp")
+    tmp_path = path.with_name(f"{path.name}.{uuid.uuid4().hex}.tmp")
     tmp_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
     tmp_path.replace(path)
 
