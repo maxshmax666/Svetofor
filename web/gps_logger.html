@@ -121,34 +121,6 @@
     .small { color:var(--muted); font-size:12px; }
     .mono { font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; }
 
-    .traffic-widget {
-      position: fixed;
-      right: 12px;
-      bottom: 12px;
-      z-index: 999;
-      min-width: 170px;
-      padding: 8px 10px;
-      background: rgba(11, 13, 17, 0.92);
-      border: 1px solid var(--border);
-      border-radius: 10px;
-      box-shadow: 0 6px 20px rgba(0, 0, 0, 0.35);
-      backdrop-filter: blur(3px);
-    }
-    .traffic-widget .title {
-      color: var(--muted);
-      font-size: 11px;
-      margin-bottom: 6px;
-    }
-    .traffic-widget .line {
-      display: flex;
-      justify-content: space-between;
-      gap: 10px;
-      font-size: 12px;
-    }
-    .traffic-widget .line + .line { margin-top: 4px; }
-    .traffic-widget .label { color: var(--muted); }
-    .traffic-widget .value { color: var(--text); }
-
     .coord-btn {
       width: 100%;
       border: 1px solid var(--border);
@@ -308,16 +280,6 @@
       width: 100%;
       accent-color: var(--primary);
     }
-    .events-toggle {
-      width: 100%;
-      justify-content: space-between;
-      background: #111622;
-      border: 1px solid var(--border);
-    }
-    .events-toggle[aria-expanded="true"] {
-      border-color: #3a4b66;
-    }
-    .hidden-block { display: none; }
     .video-preview {
       width: 100%;
       border-radius: 12px;
@@ -339,7 +301,7 @@
   <div class="wrap">
     <h1>GPS логгер курьера</h1>
     <div class="sub">
-      RAW-режим: GPS + sensor events. Пишем сырые точки и сырые датчики без объединения и без фильтрации.
+      Рабочий режим: только ключевые данные для водителя. Технические метрики и debug спрятаны ниже.
     </div>
 
     <div class="panel">
@@ -353,11 +315,9 @@
 
       <div class="grid">
         <div class="kv"><div class="k">Статус</div><div class="v" id="status">Ожидание</div></div>
-        <div class="kv"><div class="k">Session ID</div><div class="v mono" id="sessionId">—</div></div>
-        <div class="kv"><div class="k">GPS точек</div><div class="v" id="sentCount">0</div></div>
-        <div class="kv"><div class="k">Последнее client time</div><div class="v" id="lastClientTime">—</div></div>
-        <div class="kv"><div class="k">Последнее server time</div><div class="v" id="lastServerTime">—</div></div>
         <div class="kv"><div class="k">Видео</div><div class="v" id="videoStatus">Не активно</div></div>
+        <div class="kv"><div class="k">Session ID</div><div class="v mono" id="sessionId">—</div></div>
+        <div class="kv"><div class="k">Последнее обновление</div><div class="v" id="lastUpdateTime">—</div></div>
         <div class="kv"><div class="k">Последний видеофайл</div><div class="v mono" id="videoFileMeta">—</div></div>
         <div class="kv">
           <div class="k">Последняя координата</div>
@@ -372,25 +332,18 @@
     </div>
 
     <div class="panel">
-      <button type="button" class="btn events-toggle" id="toggleEventsBtn" aria-expanded="false" aria-controls="eventsLogWrap">
-        <span>Последние события (debug)</span>
-        <span id="toggleEventsLabel">Показать</span>
-      </button>
-      <div class="hidden-block" id="eventsLogWrap" style="margin-top:10px;">
-        <div class="logbox" id="logView">Пока пусто.</div>
-      </div>
-    </div>
-  </div>
-
-  <div class="traffic-widget" aria-live="polite">
-    <div class="title">Трафик за сессию</div>
-    <div class="line">
-      <span class="label">Отправлено</span>
-      <span class="value mono" id="trafficOut">0 B</span>
-    </div>
-    <div class="line">
-      <span class="label">Получено</span>
-      <span class="value mono" id="trafficIn">0 B</span>
+      <details id="techDetails">
+        <summary class="small">Техническая информация и debug</summary>
+        <div class="grid" style="margin-top:10px;">
+          <div class="kv"><div class="k">GPS точек</div><div class="v" id="sentCount">0</div></div>
+          <div class="kv"><div class="k">Sensor events</div><div class="v" id="sensorCount">0</div></div>
+          <div class="kv"><div class="k">Последнее client time</div><div class="v" id="lastClientTime">—</div></div>
+          <div class="kv"><div class="k">Последнее server time</div><div class="v" id="lastServerTime">—</div></div>
+        </div>
+        <div style="margin-top:10px;">
+          <div class="logbox" id="logView">Пока пусто.</div>
+        </div>
+      </details>
     </div>
   </div>
 
@@ -439,8 +392,6 @@
     let sensorCount = 0;
     let wakeLock = null;
     let batteryRef = null;
-    let trafficOutBytes = 0;
-    let trafficInBytes = 0;
     let lastPointSnapshot = null;
     let videoStream = null;
     let mediaRecorder = null;
@@ -473,13 +424,12 @@
       status: document.getElementById("status"),
       sessionId: document.getElementById("sessionId"),
       sentCount: document.getElementById("sentCount"),
+      sensorCount: document.getElementById("sensorCount"),
       lastClientTime: document.getElementById("lastClientTime"),
       lastServerTime: document.getElementById("lastServerTime"),
+      lastUpdateTime: document.getElementById("lastUpdateTime"),
       lastCoord: document.getElementById("lastCoord"),
       logView: document.getElementById("logView"),
-      toggleEventsBtn: document.getElementById("toggleEventsBtn"),
-      toggleEventsLabel: document.getElementById("toggleEventsLabel"),
-      eventsLogWrap: document.getElementById("eventsLogWrap"),
       startBtn: document.getElementById("startBtn"),
       stopBtn: document.getElementById("stopBtn"),
       videoStartBtn: document.getElementById("videoStartBtn"),
@@ -488,8 +438,6 @@
       videoStatus: document.getElementById("videoStatus"),
       videoFileMeta: document.getElementById("videoFileMeta"),
       videoPreview: document.getElementById("videoPreview"),
-      trafficOut: document.getElementById("trafficOut"),
-      trafficIn: document.getElementById("trafficIn"),
       pointMarkDialog: document.getElementById("pointMarkDialog"),
       pointMarkForm: document.getElementById("pointMarkForm"),
       pointMarkSummary: document.getElementById("pointMarkSummary"),
@@ -502,37 +450,6 @@
       colorSegment: document.getElementById("colorSegment"),
       secondsGrid: document.getElementById("secondsGrid"),
     };
-
-    const encoder = new TextEncoder();
-
-    function bytesOfString(value) {
-      if (!value) return 0;
-      return encoder.encode(value).byteLength;
-    }
-
-    function formatBytes(bytes) {
-      if (!Number.isFinite(bytes) || bytes <= 0) return "0 B";
-      const units = ["B", "KB", "MB", "GB"];
-      let size = bytes;
-      let idx = 0;
-      while (size >= 1024 && idx < units.length - 1) {
-        size /= 1024;
-        idx += 1;
-      }
-      const precision = idx === 0 ? 0 : size >= 100 ? 0 : size >= 10 ? 1 : 2;
-      return `${size.toFixed(precision)} ${units[idx]}`;
-    }
-
-    function renderTrafficWidget() {
-      els.trafficOut.textContent = formatBytes(trafficOutBytes);
-      els.trafficIn.textContent = formatBytes(trafficInBytes);
-    }
-
-    function registerTrafficTransfer(outBytes, inBytes) {
-      if (Number.isFinite(outBytes) && outBytes > 0) trafficOutBytes += outBytes;
-      if (Number.isFinite(inBytes) && inBytes > 0) trafficInBytes += inBytes;
-      renderTrafficWidget();
-    }
 
     function canRecordVideo() {
       return !!(navigator.mediaDevices?.getUserMedia && window.MediaRecorder);
@@ -820,10 +737,6 @@
       });
       const responseText = await res.text();
       const responseContentType = res.headers.get("content-type") || "";
-      registerTrafficTransfer(
-        bytesOfString(requestBody),
-        bytesOfString(responseText)
-      );
       let data = {};
       let jsonParsed = false;
       if (responseText) {
@@ -914,6 +827,10 @@
         minute:"2-digit",
         second:"2-digit"
       });
+    }
+
+    function markLastUpdate(ms = Date.now()) {
+      els.lastUpdateTime.textContent = formatLocal(ms);
     }
 
     function persistSessionState() {
@@ -1073,7 +990,9 @@
       sensorCount = Number.isFinite(meta.sensor_event_count) ? meta.sensor_event_count : 0;
       els.sessionId.textContent = sessionId;
       els.sentCount.textContent = String(sentCount);
+      els.sensorCount.textContent = String(sensorCount);
       els.exportBtn.href = `/api/export/session/${sessionId}.tar.gz`;
+      markLastUpdate();
       persistSessionState();
     }
 
@@ -1161,6 +1080,7 @@
       sessionId = null;
       lastPointSnapshot = null;
       els.sessionId.textContent = "—";
+      els.lastUpdateTime.textContent = "—";
       clearPersistedSessionState();
       updateVideoUi();
     }
@@ -1190,11 +1110,15 @@
 
       if (!data) {
         sensorCount += 1;
+        els.sensorCount.textContent = String(sensorCount);
+        markLastUpdate();
         persistSessionState();
         return;
       }
 
       sensorCount = data.sensorEventCount ?? (sensorCount + 1);
+      els.sensorCount.textContent = String(sensorCount);
+      markLastUpdate();
       persistSessionState();
 
       logLine(`[SENSOR ${data.eventSeq}] ${payload.eventType} | t=${payload.clientLocalTime}`);
@@ -1416,6 +1340,7 @@
         if (!data) {
           sentCount += 1;
           els.sentCount.textContent = String(sentCount);
+          markLastUpdate(payload.clientTimestampMs);
           persistSessionState();
           lastPointSnapshot = {
             sessionId,
@@ -1431,6 +1356,7 @@
 
         sentCount = data.pointCount ?? (sentCount + 1);
         els.sentCount.textContent = String(sentCount);
+        markLastUpdate(payload.clientTimestampMs);
         persistSessionState();
         els.lastClientTime.textContent = `${payload.clientLocalTime} | ${payload.clientIsoTime}`;
         els.lastServerTime.textContent = new Date().toISOString();
@@ -1520,7 +1446,6 @@
         logLine(`[BOOTSTRAP ERR] ${bootstrapErr.message}`);
       });
     });
-    renderTrafficWidget();
 
     els.startBtn.addEventListener("click", () => {
       startSession().catch((e) => {
@@ -1567,14 +1492,6 @@
 
     els.pointMarkCancelBtn.addEventListener("click", () => {
       closePointMarkDialog();
-    });
-
-    els.toggleEventsBtn.addEventListener("click", () => {
-      const expanded = els.toggleEventsBtn.getAttribute("aria-expanded") === "true";
-      const nextExpanded = !expanded;
-      els.toggleEventsBtn.setAttribute("aria-expanded", nextExpanded ? "true" : "false");
-      els.toggleEventsLabel.textContent = nextExpanded ? "Скрыть" : "Показать";
-      els.eventsLogWrap.classList.toggle("hidden-block", !nextExpanded);
     });
 
     els.pointMarkForm.addEventListener("submit", async (event) => {
