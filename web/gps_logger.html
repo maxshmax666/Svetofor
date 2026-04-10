@@ -359,6 +359,45 @@
       max-height: 280px;
       object-fit: cover;
     }
+    .status-list {
+      display:flex;
+      flex-direction:column;
+      gap:8px;
+      margin-top:8px;
+    }
+    .status-item {
+      display:flex;
+      justify-content:space-between;
+      gap:8px;
+      padding:8px 0;
+      border-bottom:1px dashed rgba(132, 156, 224, 0.25);
+      font-size:17px;
+    }
+    .status-item:last-child { border-bottom:0; }
+    .bottom-nav {
+      position: fixed;
+      left: 0;
+      right: 0;
+      bottom: 0;
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0,1fr));
+      gap: 8px;
+      padding: 10px 14px 20px;
+      background: rgba(4, 8, 23, 0.92);
+      border-top: 1px solid var(--border);
+      backdrop-filter: blur(10px);
+      z-index: 5;
+    }
+    .nav-item {
+      color: var(--muted);
+      text-align: center;
+      font-size: 13px;
+      padding-top: 2px;
+    }
+    .nav-item.active {
+      color: #9cbcff;
+      font-weight: 700;
+    }
     @media (max-width:520px) {
       .seconds-grid { grid-template-columns: repeat(4, minmax(0, 1fr)); }
       .modal-actions button {
@@ -378,6 +417,26 @@
         <button class="primary" id="sessionToggleBtn">Начать смену</button>
         <div class="control-hint" id="sessionToggleHint">Ручной запуск смены.</div>
       </div>
+      <div style="margin-top:10px;">
+        <video id="videoPreview" class="video-preview" playsinline muted autoplay></video>
+      </div>
+
+      <div class="grid">
+        <div class="kv">
+          <div class="k">Состояние</div>
+          <div class="status-list">
+            <div class="status-item"><span>Смена</span><strong id="status">Ожидание</strong></div>
+            <div class="status-item"><span>Видео</span><strong id="videoStatus">Не активно</strong></div>
+            <div class="status-item"><span>Outbox sync</span><strong id="outboxSyncStatus">fallback</strong></div>
+          </div>
+        </div>
+        <div class="kv">
+          <div class="k">GPS координата</div>
+          <div class="v">
+            <button type="button" class="coord-btn" id="lastCoord" aria-haspopup="dialog">—</button>
+          </div>
+        </div>
+      </div>
 
       <details class="secondary-controls" id="advancedControls">
         <summary>Доп. действия (видео, экспорт, сервис)</summary>
@@ -389,29 +448,6 @@
           <a class="btn good" id="exportBtn" href="#" target="_blank">Экспорт сессии</a>
         </div>
       </details>
-
-      <div class="grid">
-        <div class="kv">
-          <div class="k">Состояние</div>
-          <div class="status-list">
-            <div class="status-item"><span>Смена</span><strong id="status">Ожидание</strong></div>
-            <div class="status-item"><span>Видео</span><strong id="videoStatus">Не активно</strong></div>
-            <div class="status-item"><span>Outbox sync</span><strong id="outboxSyncStatus">fallback</strong></div>
-          </div>
-        </div>
-        <div class="kv"><div class="k">Session ID</div><div class="v mono" id="sessionId">—</div></div>
-        <div class="kv"><div class="k">Последнее обновление</div><div class="v" id="lastUpdateTime">—</div></div>
-        <div class="kv"><div class="k">Последний видеофайл</div><div class="v mono" id="videoFileMeta">—</div></div>
-        <div class="kv">
-          <div class="k">GPS координата</div>
-          <div class="v">
-            <button type="button" class="coord-btn" id="lastCoord" aria-haspopup="dialog">—</button>
-          </div>
-        </div>
-      </div>
-      <div style="margin-top:10px;">
-        <video id="videoPreview" class="video-preview" playsinline muted autoplay></video>
-      </div>
     </div>
 
     <div class="panel">
@@ -424,6 +460,9 @@
           <div class="kv"><div class="k">Последнее server time</div><div class="v" id="lastServerTime">—</div></div>
           <div class="kv"><div class="k">Permission matrix</div><div class="v mono" id="permissionMatrix">geo=unknown | camera=unknown | microphone=unknown | notifications=unknown | sync=unknown | motion=unknown | orientation=unknown | battery=unknown</div></div>
           <div class="kv"><div class="k">Видео готовность</div><div class="v mono" id="videoReadiness">secure_context=unknown | mediaDevices=unknown | mediaRecorder=unknown | camera_permission=unknown</div></div>
+          <div class="kv"><div class="k">Session ID</div><div class="v mono" id="sessionId">—</div></div>
+          <div class="kv"><div class="k">Последнее обновление</div><div class="v" id="lastUpdateTime">—</div></div>
+          <div class="kv"><div class="k">Последний видеофайл</div><div class="v mono" id="videoFileMeta">—</div></div>
         </div>
         <div class="small" style="margin-top:8px;">
           Легенда: <span class="mono">unavailable</span> = API не поддерживается устройством/браузером;
@@ -525,6 +564,7 @@
     const SESSION_STATE_KEY = "gps-logger-active-session-v1";
     const BACKGROUND_FLUSH_INTERVAL_MS = 15000;
     const AUTO_START_SESSION = false;
+    const AUTO_START_VIDEO_ON_SESSION_START = true;
     const VIDEO_REQUIRED_FOR_SESSION = false;
     let syncInfoLoggedOnce = false;
     const permissionMatrix = {
@@ -649,7 +689,9 @@
       if (VIDEO_REQUIRED_FOR_SESSION) {
         return "Ручной запуск смены. Видео обязательно: при отказе доступа к камере старт будет заблокирован.";
       }
-      return "Ручной запуск смены. Видео опционально: при отказе доступ к GPS сохранится, но запись видео будет недоступна.";
+      return AUTO_START_VIDEO_ON_SESSION_START
+        ? "Ручной запуск смены. Видео запускается автоматически, если камера доступна."
+        : "Ручной запуск смены. Видео опционально: при отказе доступ к GPS сохранится, но запись видео будет недоступна.";
     }
 
     function updateSessionToggleUi({ mode = "manual" } = {}) {
@@ -1694,6 +1736,15 @@
         logLine(`[SESSION START] ${sessionId} | mode=${mode}`);
         updateSessionToggleUi({ mode });
         await activateRealtimeCapture();
+        if (AUTO_START_VIDEO_ON_SESSION_START) {
+          try {
+            await startVideoRecording();
+          } catch (videoError) {
+            const errMsg = videoError?.message || "Не удалось автостартовать видеозапись";
+            logLine(`[VIDEO AUTOSTART ERR] ${errMsg}`);
+            setStatus(`Смена запущена, но видео не стартовало автоматически: ${errMsg}`, "warn");
+          }
+        }
         updateVideoUi({ mode });
       } finally {
         isSessionStarting = false;
@@ -2267,42 +2318,3 @@
   </script>
 </body>
 </html>
-    .status-list {
-      display:flex;
-      flex-direction:column;
-      gap:8px;
-      margin-top:8px;
-    }
-    .status-item {
-      display:flex;
-      justify-content:space-between;
-      gap:8px;
-      padding:8px 0;
-      border-bottom:1px dashed rgba(132, 156, 224, 0.25);
-      font-size:17px;
-    }
-    .status-item:last-child { border-bottom:0; }
-    .bottom-nav {
-      position: fixed;
-      left: 0;
-      right: 0;
-      bottom: 0;
-      display: grid;
-      grid-template-columns: repeat(4, minmax(0,1fr));
-      gap: 8px;
-      padding: 10px 14px 20px;
-      background: rgba(4, 8, 23, 0.92);
-      border-top: 1px solid var(--border);
-      backdrop-filter: blur(10px);
-      z-index: 5;
-    }
-    .nav-item {
-      color: var(--muted);
-      text-align: center;
-      font-size: 13px;
-      padding-top: 2px;
-    }
-    .nav-item.active {
-      color: #9cbcff;
-      font-weight: 700;
-    }
