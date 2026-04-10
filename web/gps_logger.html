@@ -1506,19 +1506,10 @@
       } else {
         try {
           await new Promise((resolve, reject) => {
-            const hardTimeout = window.setTimeout(() => {
-              reject(new Error("Geolocation timeout"));
-            }, 3500);
             navigator.geolocation.getCurrentPosition(
-              () => {
-                window.clearTimeout(hardTimeout);
-                resolve();
-              },
-              (error) => {
-                window.clearTimeout(hardTimeout);
-                reject(error);
-              },
-              { enableHighAccuracy: false, maximumAge: 60000, timeout: 8000 }
+              () => resolve(),
+              (error) => reject(error),
+              { enableHighAccuracy: false, maximumAge: 60000, timeout: 12000 }
             );
           });
           result.geo = { state: "granted", reason: "probe=getCurrentPosition" };
@@ -1530,15 +1521,15 @@
         } catch (error) {
           const isDenied = Number(error?.code) === 1 || error?.name === "NotAllowedError" || geoPermissionState === "denied";
           const isTimeout = Number(error?.code) === 3 || /timeout/i.test(String(error?.message || ""));
-          const canProceedWithGrantedPermission = !isDenied && isTimeout && geoPermissionState === "granted";
-          if (canProceedWithGrantedPermission) {
-            result.geo = { state: "granted", reason: "probe_timeout_with_granted_permission" };
+          const canProceedWithTimeout = !isDenied && isTimeout;
+          if (canProceedWithTimeout) {
+            result.geo = { state: "granted", reason: "probe_timeout_tolerated" };
             logPermission("geo", "granted", {
               reason: "browser_policy",
               source: "permissions_api",
-              details: "probe=getCurrentPosition | timeout tolerated because permissions_api=granted"
+              details: `probe=getCurrentPosition | timeout tolerated (permissions_api=${geoPermissionState})`
             });
-            logLine("[PERMISSION WARN] Геолокация: timeout при проверке, продолжаю запуск с watchPosition");
+            logLine(`[PERMISSION WARN] Геолокация: timeout при проверке (permissions_api=${geoPermissionState}), продолжаю запуск с watchPosition`);
           } else {
             const status = isDenied ? "denied" : "error";
             const reason = isDenied
