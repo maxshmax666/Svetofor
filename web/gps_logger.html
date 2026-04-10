@@ -922,6 +922,37 @@
       }
     }
 
+    function firstDefined(source, keys) {
+      for (const key of keys) {
+        if (Object.prototype.hasOwnProperty.call(source, key) && source[key] != null) {
+          return source[key];
+        }
+      }
+      return undefined;
+    }
+
+    function normalizeSessionMeta(rawMeta) {
+      const meta = rawMeta && typeof rawMeta === "object" ? rawMeta : {};
+      const normalizedSessionIdRaw = firstDefined(meta, ["session_id", "sessionId", "id"]);
+      const normalizedSessionId =
+        typeof normalizedSessionIdRaw === "string" ? normalizedSessionIdRaw.trim() : String(normalizedSessionIdRaw || "").trim();
+
+      const normalizedStatusRaw = firstDefined(meta, ["status", "session_status", "sessionStatus"]);
+      const normalizedStatus = typeof normalizedStatusRaw === "string" ? normalizedStatusRaw.trim().toLowerCase() : "";
+
+      const normalizedPointCountRaw = firstDefined(meta, ["point_count", "pointCount"]);
+      const normalizedSensorCountRaw = firstDefined(meta, ["sensor_event_count", "sensorEventCount"]);
+      const normalizedCommentCountRaw = firstDefined(meta, ["comment_count", "commentCount"]);
+
+      return {
+        sessionId: normalizedSessionId,
+        status: normalizedStatus,
+        pointCount: Number.isFinite(normalizedPointCountRaw) ? normalizedPointCountRaw : 0,
+        sensorCount: Number.isFinite(normalizedSensorCountRaw) ? normalizedSensorCountRaw : 0,
+        commentCount: Number.isFinite(normalizedCommentCountRaw) ? normalizedCommentCountRaw : 0
+      };
+    }
+
     function resetPointMarkForm() {
       els.pointMarkForm.reset();
       els.pointMarkSeconds.value = "32";
@@ -1045,9 +1076,13 @@
     }
 
     function applySessionUi(meta) {
-      sessionId = meta.session_id;
-      sentCount = Number.isFinite(meta.point_count) ? meta.point_count : 0;
-      sensorCount = Number.isFinite(meta.sensor_event_count) ? meta.sensor_event_count : 0;
+      const normalized = normalizeSessionMeta(meta);
+      if (!normalized.sessionId) {
+        throw new Error("Сервер вернул некорректный session id");
+      }
+      sessionId = normalized.sessionId;
+      sentCount = normalized.pointCount;
+      sensorCount = normalized.sensorCount;
       els.sessionId.textContent = sessionId;
       els.sentCount.textContent = String(sentCount);
       els.sensorCount.textContent = String(sensorCount);
@@ -1107,8 +1142,9 @@
     }
 
     async function resumeSession(meta) {
-      if (!meta || !meta.session_id) return false;
-      if (meta.status && meta.status !== "active") return false;
+      const normalized = normalizeSessionMeta(meta);
+      if (!normalized.sessionId) return false;
+      if (normalized.status && normalized.status !== "active") return false;
       applySessionUi(meta);
       await activateRealtimeCapture();
       setStatus("Сессия восстановлена после перезапуска приложения", "ok");
