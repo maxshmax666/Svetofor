@@ -1465,7 +1465,7 @@
           source: "permissions_api",
           details: "Permissions API unavailable"
         });
-        return;
+        return "unknown";
       }
       try {
         const result = await navigator.permissions.query({ name: permissionName });
@@ -1475,12 +1475,14 @@
           source: "permissions_api",
           details: `state=${result.state}`
         });
+        return normalizedState;
       } catch (e) {
         logPermission(scope, "unavailable", {
           reason: "api_unavailable",
           source: "permissions_api",
           details: `${permissionName}: ${e?.message || "query failed"}`
         });
+        return "unknown";
       }
     }
 
@@ -1492,7 +1494,7 @@
       await queryPermissionState("camera", "camera");
       await queryPermissionState("microphone", "microphone");
       await queryPermissionState("notifications", "notifications");
-      await queryPermissionState("geolocation", "geo");
+      const geoPermissionState = await queryPermissionState("geolocation", "geo");
 
       if (!navigator.geolocation) {
         result.geo = { state: "error", reason: "Geolocation API недоступен" };
@@ -1516,7 +1518,7 @@
                 window.clearTimeout(hardTimeout);
                 reject(error);
               },
-              { enableHighAccuracy: true, maximumAge: 0, timeout: 2500 }
+              { enableHighAccuracy: false, maximumAge: 60000, timeout: 8000 }
             );
           });
           result.geo = { state: "granted", reason: "probe=getCurrentPosition" };
@@ -1526,17 +1528,29 @@
             details: result.geo.reason
           });
         } catch (error) {
-          const isDenied = Number(error?.code) === 1 || error?.name === "NotAllowedError";
-          const status = isDenied ? "denied" : "error";
-          const reason = isDenied
-            ? "Доступ к геопозиции запрещён"
-            : (error?.message || "Ошибка проверки геопозиции");
-          result.geo = { state: status, reason };
-          logPermission("geo", status, {
-            reason: isDenied ? "user_denied" : "system_denied",
-            source: "permissions_api",
-            details: `probe=getCurrentPosition | ${reason}`
-          });
+          const isDenied = Number(error?.code) === 1 || error?.name === "NotAllowedError" || geoPermissionState === "denied";
+          const isTimeout = Number(error?.code) === 3 || /timeout/i.test(String(error?.message || ""));
+          const canProceedWithGrantedPermission = !isDenied && isTimeout && geoPermissionState === "granted";
+          if (canProceedWithGrantedPermission) {
+            result.geo = { state: "granted", reason: "probe_timeout_with_granted_permission" };
+            logPermission("geo", "granted", {
+              reason: "browser_policy",
+              source: "permissions_api",
+              details: "probe=getCurrentPosition | timeout tolerated because permissions_api=granted"
+            });
+            logLine("[PERMISSION WARN] Геолокация: timeout при проверке, продолжаю запуск с watchPosition");
+          } else {
+            const status = isDenied ? "denied" : "error";
+            const reason = isDenied
+              ? "Доступ к геопозиции запрещён"
+              : (error?.message || "Ошибка проверки геопозиции");
+            result.geo = { state: status, reason };
+            logPermission("geo", status, {
+              reason: isDenied ? "user_denied" : "system_denied",
+              source: "permissions_api",
+              details: `probe=getCurrentPosition | ${reason}`
+            });
+          }
         }
       }
 
