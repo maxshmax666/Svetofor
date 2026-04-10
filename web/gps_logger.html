@@ -427,6 +427,7 @@
     let videoStartedAtMs = null;
     let pendingVideoChunks = [];
     let isStoppingVideo = false;
+    let videoStartBlockedReason = "";
 
     const POINT_MARK_ENDPOINT = "/api/point-comment";
     const MARK_DURATION_MIN = 16;
@@ -532,14 +533,15 @@
       const recording = !!mediaRecorder && mediaRecorder.state === "recording";
       const sessionActive = Boolean(sessionId);
       const unavailableReason = getVideoUnavailableReason(sessionActive);
-      els.videoStartBtn.disabled = Boolean(unavailableReason) || recording;
+      const startBlockedReason = unavailableReason || videoStartBlockedReason;
+      els.videoStartBtn.disabled = Boolean(startBlockedReason) || recording;
       els.videoStopBtn.disabled = !recording || isStoppingVideo;
-      els.videoStartBtn.title = unavailableReason || "";
+      els.videoStartBtn.title = startBlockedReason || "";
       els.videoStopBtn.title = (!recording && !isStoppingVideo) ? "Нет активной видеозаписи" : "";
       els.videoStatus.textContent = recording
         ? `Запись идёт (${videoMimeType || "default"})`
-        : unavailableReason
-          ? `Не активно: ${unavailableReason}`
+        : startBlockedReason
+          ? `Не активно: ${startBlockedReason}`
           : "Не активно";
       if (els.sessionToggleBtn) {
         els.sessionToggleBtn.textContent = sessionActive ? "Завершить смену" : "Начать смену";
@@ -595,11 +597,15 @@
 
     async function startVideoRecording() {
       if (!sessionId) {
+        videoStartBlockedReason = "Сначала запустите смену, затем включайте запись";
         setStatus("Сначала запустите сессию, потом включайте видео", "warn");
+        updateVideoUi();
         return;
       }
       if (!canRecordVideo()) {
+        videoStartBlockedReason = "MediaRecorder/getUserMedia не поддерживаются на этом устройстве";
         setStatus("MediaRecorder/getUserMedia не поддерживаются на этом устройстве", "bad");
+        updateVideoUi();
         return;
       }
       if (mediaRecorder && mediaRecorder.state === "recording") {
@@ -607,7 +613,37 @@
         return;
       }
 
+      videoStartBlockedReason = "";
       videoMimeType = chooseVideoMimeType();
+
+      if (navigator.permissions?.query) {
+        try {
+          const cameraPermission = await navigator.permissions.query({ name: "camera" });
+          if (cameraPermission.state === "denied") {
+            videoStartBlockedReason = "Доступ к камере запрещён в браузере/системе";
+            setStatus("Доступ к камере запрещён в браузере/системе", "bad");
+            logLine("[VIDEO PERMISSION] camera=denied");
+            updateVideoUi();
+            return;
+          }
+        } catch (permissionErr) {
+          logLine(`[VIDEO PERMISSION WARN] ${permissionErr.message || permissionErr}`);
+        }
+      }
+
+      const mapGetUserMediaErrorMessage = (error) => {
+        switch (error?.name) {
+          case "NotAllowedError":
+            return "Доступ к камере запрещён в браузере/системе";
+          case "NotFoundError":
+            return "Камера не найдена";
+          case "NotReadableError":
+            return "Камера занята другим приложением";
+          default:
+            return `Не удалось включить камеру: ${error?.message || "неизвестная ошибка"}`;
+        }
+      };
+
       let stream = null;
       try {
         stream = await navigator.mediaDevices.getUserMedia({
@@ -621,8 +657,19 @@
         });
       } catch (primaryErr) {
         logLine(`[VIDEO CAMERA WARN] ${primaryErr.message}`);
-        stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: false });
+        try {
+          stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: false });
+        } catch (fallbackErr) {
+          const mappedMessage = mapGetUserMediaErrorMessage(fallbackErr);
+          videoStartBlockedReason = mappedMessage;
+          setStatus(mappedMessage, "bad");
+          logLine(`[VIDEO CAMERA ERR] ${fallbackErr.name || "Error"}: ${fallbackErr.message || "unknown"}`);
+          updateVideoUi();
+          return;
+        }
       }
+
+      videoStartBlockedReason = "";
       videoStream = stream;
       els.videoPreview.srcObject = stream;
       els.videoPreview.play().catch(() => {});
