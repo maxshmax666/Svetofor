@@ -344,6 +344,7 @@
         <div class="kv"><div class="k">Видео</div><div class="v" id="videoStatus">Не активно</div></div>
         <div class="kv"><div class="k">Session ID</div><div class="v mono" id="sessionId">—</div></div>
         <div class="kv"><div class="k">Последнее обновление</div><div class="v" id="lastUpdateTime">—</div></div>
+        <div class="kv"><div class="k">Outbox sync</div><div class="v" id="outboxSyncStatus">fallback</div></div>
         <div class="kv"><div class="k">Последний видеофайл</div><div class="v mono" id="videoFileMeta">—</div></div>
         <div class="kv">
           <div class="k">Последняя координата</div>
@@ -472,6 +473,7 @@
       videoStopBtn: document.getElementById("videoStopBtn"),
       exportBtn: document.getElementById("exportBtn"),
       videoStatus: document.getElementById("videoStatus"),
+      outboxSyncStatus: document.getElementById("outboxSyncStatus"),
       videoFileMeta: document.getElementById("videoFileMeta"),
       videoPreview: document.getElementById("videoPreview"),
       permissionMatrix: document.getElementById("permissionMatrix"),
@@ -487,6 +489,8 @@
       colorSegment: document.getElementById("colorSegment"),
       secondsGrid: document.getElementById("secondsGrid"),
     };
+
+    setOutboxSyncStatus("fallback", "init");
 
     function canRecordVideo() {
       return !!(window.isSecureContext && navigator.mediaDevices?.getUserMedia && window.MediaRecorder);
@@ -576,6 +580,17 @@
       if (els.videoPreview) {
         els.videoPreview.srcObject = null;
       }
+    }
+
+    function setOutboxSyncStatus(mode, reason = "") {
+      if (!els.outboxSyncStatus) return;
+      const normalizedMode = mode === "active" ? "active" : "fallback";
+      els.outboxSyncStatus.textContent = reason
+        ? `${normalizedMode}: ${reason}`
+        : normalizedMode;
+      els.outboxSyncStatus.classList.toggle("status-ok", normalizedMode === "active");
+      els.outboxSyncStatus.classList.toggle("status-warn", normalizedMode === "fallback");
+      els.outboxSyncStatus.classList.remove("status-bad");
     }
 
     async function startVideoRecording() {
@@ -788,40 +803,57 @@
         logLine(message);
       };
 
-      if (!window.isSecureContext || !("serviceWorker" in navigator)) {
+      if (!("serviceWorker" in navigator)) {
+        setOutboxSyncStatus("fallback", "serviceWorker unsupported");
+        return;
+      }
+
+      if (!window.isSecureContext) {
         logPermission("sync", "unavailable", "Background Sync requires secure context and service worker");
         logPermission("background_sync", "unavailable", "Background Sync requires secure context and service worker");
         logSyncInfoOnce("[SYNC INFO] Background Sync not supported; using in-page flush loop");
+        setOutboxSyncStatus("fallback", "in-page flush");
         return;
       }
 
       try {
         const registration = await navigator.serviceWorker.ready;
-        if (!registration.sync?.register) {
+        if (!("sync" in registration) || !registration.sync?.register) {
           logPermission("sync", "unavailable", "ServiceWorkerRegistration.sync.register is unavailable");
           logPermission("background_sync", "unavailable", "ServiceWorkerRegistration.sync.register is unavailable");
-          logSyncInfoOnce("[SYNC INFO] Background Sync not supported; using in-page flush loop");
+          logSyncInfoOnce("[SYNC INFO] Background Sync unsupported");
+          setOutboxSyncStatus("fallback", "in-page flush");
           return;
         }
         await registration.sync.register(OUTBOX_SYNC_TAG);
         logPermission("sync", "granted", `tag=${OUTBOX_SYNC_TAG}`);
         logPermission("background_sync", "granted", `tag=${OUTBOX_SYNC_TAG}`);
+        setOutboxSyncStatus("active");
       } catch (e) {
         const name = typeof e?.name === "string" ? e.name : "";
         const message = typeof e?.message === "string" ? e.message : String(e || "");
-        const isPermissionError =
-          name === "NotAllowedError" || /permission denied/i.test(message);
+        const normalizedMessage = (message || "").trim();
+        const isPolicyDisabledError =
+          name === "NotAllowedError" ||
+          name === "SecurityError" ||
+          name === "InvalidStateError" ||
+          /permission denied/i.test(normalizedMessage) ||
+          /background sync.*(disabled|blocked|not allowed)/i.test(normalizedMessage);
 
-        if (isPermissionError) {
-          logPermission("sync", "denied", message || "permission denied");
-          logPermission("background_sync", "denied", message || "permission denied");
-          logSyncInfoOnce("[SYNC INFO] Background Sync not supported; using in-page flush loop");
+        if (isPolicyDisabledError) {
+          const policyReason = normalizedMessage || name || "browser policy";
+          logPermission("sync", "denied", policyReason);
+          logPermission("background_sync", "denied", policyReason);
+          logSyncInfoOnce("[SYNC INFO] disabled by browser policy");
+          setOutboxSyncStatus("fallback", "policy disabled");
           return;
         }
 
-        logPermission("sync", "error", message || "Background Sync register failed");
-        logPermission("background_sync", "error", message || "Background Sync register failed");
-        logLine(`[SYNC WARN] ${message}`);
+        const errorMessage = normalizedMessage || name || "Background Sync register failed";
+        logPermission("sync", "error", errorMessage);
+        logPermission("background_sync", "error", errorMessage);
+        logLine(`[SYNC ERR] ${errorMessage}`);
+        setOutboxSyncStatus("fallback", "in-page flush");
       }
     }
 
@@ -891,7 +923,7 @@
         await trimOutboxIfNeeded();
         await registerOutboxSync();
         logLine(`[OUTBOX] queued ${endpoint} | reason=${e.message}`);
-        setStatus("Оффлайн/фон: событие поставлено в очередь", "warn");
+        logLine("[OUTBOX INFO] using queued delivery (background/in-page)");
         return null;
       }
     }
