@@ -57,8 +57,14 @@
     }
     .primary-controls {
       display: flex;
+      flex-direction: column;
       gap: 10px;
       margin-bottom: 10px;
+    }
+    .control-hint {
+      color: var(--muted);
+      font-size: 12px;
+      margin-top: -4px;
     }
     .secondary-controls {
       border: 1px dashed var(--border);
@@ -357,6 +363,7 @@
     <div class="panel">
       <div class="primary-controls">
         <button class="primary" id="sessionToggleBtn">Начать смену</button>
+        <div class="control-hint" id="sessionToggleHint">Ручной запуск смены.</div>
       </div>
 
       <details class="secondary-controls" id="advancedControls">
@@ -487,6 +494,7 @@
     const OUTBOX_MAX_ITEMS = 5000;
     const SESSION_STATE_KEY = "gps-logger-active-session-v1";
     const BACKGROUND_FLUSH_INTERVAL_MS = 15000;
+    const AUTO_START_SESSION = false;
     let syncInfoLoggedOnce = false;
     const permissionMatrix = {
       geo: "unknown",
@@ -529,6 +537,7 @@
       startBtn: document.getElementById("startBtn"),
       stopBtn: document.getElementById("stopBtn"),
       sessionToggleBtn: document.getElementById("sessionToggleBtn"),
+      sessionToggleHint: document.getElementById("sessionToggleHint"),
       videoStartBtn: document.getElementById("videoStartBtn"),
       videoStopBtn: document.getElementById("videoStopBtn"),
       exportBtn: document.getElementById("exportBtn"),
@@ -590,7 +599,34 @@
       return "";
     }
 
-    function updateVideoUi() {
+    function getSessionUiHint({ sessionActive, mode }) {
+      if (sessionActive) {
+        return `Активная смена (источник: ${mode}). Нажмите, чтобы завершить.`;
+      }
+      if (mode === "auto") {
+        return "Автостарт включён. Смена поднимется автоматически, если активной нет.";
+      }
+      if (mode === "resume") {
+        return "Смена восстановлена с сервера.";
+      }
+      return "Ручной запуск смены.";
+    }
+
+    function updateSessionToggleUi({ mode = "manual" } = {}) {
+      const sessionActive = Boolean(sessionId);
+      if (!els.sessionToggleBtn) return;
+      const nextActionLabel = sessionActive ? "Завершить смену" : "Начать смену";
+      const hintText = getSessionUiHint({ sessionActive, mode });
+      els.sessionToggleBtn.textContent = nextActionLabel;
+      els.sessionToggleBtn.title = hintText;
+      els.sessionToggleBtn.classList.toggle("warn", sessionActive);
+      els.sessionToggleBtn.classList.toggle("primary", !sessionActive);
+      if (els.sessionToggleHint) {
+        els.sessionToggleHint.textContent = hintText;
+      }
+    }
+
+    function updateVideoUi({ mode = "manual" } = {}) {
       const recording = !!mediaRecorder && mediaRecorder.state === "recording";
       const sessionActive = Boolean(sessionId);
       const unavailableReason = getVideoUnavailableReason(sessionActive);
@@ -604,11 +640,7 @@
         : startBlockedReason
           ? `Не активно: ${startBlockedReason}`
           : "Не активно";
-      if (els.sessionToggleBtn) {
-        els.sessionToggleBtn.textContent = sessionActive ? "Завершить смену" : "Начать смену";
-        els.sessionToggleBtn.classList.toggle("warn", sessionActive);
-        els.sessionToggleBtn.classList.toggle("primary", !sessionActive);
-      }
+      updateSessionToggleUi({ mode });
     }
 
     function buildVideoFilename({ session, startedAtMs, stoppedAtMs, extension }) {
@@ -1416,9 +1448,9 @@
       await emitVisibilityChange();
     }
 
-    async function startSession({ autoStart = false } = {}) {
+    async function startSession({ mode = "manual" } = {}) {
       if (sessionId || isSessionStarting) {
-        if (!autoStart) setStatus("Сессия уже активна", "warn");
+        if (mode !== "auto") setStatus("Сессия уже активна", "warn");
         return;
       }
 
@@ -1437,8 +1469,9 @@
 
         const data = await postJson("/api/session/start", payload);
         applySessionUi(data.session || {});
-        setStatus("Сессия создана, запускаю GPS и датчики...", "ok");
-        logLine(`[SESSION START] ${sessionId}${autoStart ? " | mode=autostart" : ""}`);
+        setStatus(`Сессия создана, запускаю GPS и датчики... (mode=${mode})`, "ok");
+        logLine(`[SESSION START] ${sessionId} | mode=${mode}`);
+        updateSessionToggleUi({ mode });
         await activateRealtimeCapture();
       } finally {
         isSessionStarting = false;
@@ -1450,16 +1483,24 @@
       if (!normalized.sessionId) return false;
       if (normalized.status && normalized.status !== "active") return false;
       applySessionUi(meta);
+      updateSessionToggleUi({ mode: "resume" });
       await activateRealtimeCapture();
-      setStatus("Сессия восстановлена после перезапуска приложения", "ok");
-      logLine(`[SESSION RESUME] ${sessionId}`);
+      setStatus("Сессия восстановлена после перезапуска приложения (mode=resume)", "ok");
+      logLine(`[SESSION RESUME] ${sessionId} | mode=resume`);
       return true;
     }
 
-    async function stopSession() {
+    async function stopSession({ skipConfirm = false } = {}) {
       if (!sessionId) {
         setStatus("Нет активной сессии", "warn");
         return;
+      }
+      if (!skipConfirm) {
+        const shouldStop = window.confirm("Завершить активную смену?");
+        if (!shouldStop) {
+          logLine("[SESSION STOP CANCEL] mode=manual");
+          return;
+        }
       }
 
       await stopVideoRecording("session_stop");
@@ -1482,7 +1523,7 @@
       els.sessionId.textContent = "—";
       els.lastUpdateTime.textContent = "—";
       clearPersistedSessionState();
-      updateVideoUi();
+      updateVideoUi({ mode: "manual" });
     }
 
     async function postSensorEvent(payload) {
@@ -1819,8 +1860,12 @@
         }
         clearPersistedSessionState();
       }
-
-      await startSession({ autoStart: true });
+      if (AUTO_START_SESSION) {
+        await startSession({ mode: "auto" });
+      } else {
+        updateSessionToggleUi({ mode: "manual" });
+        logLine("[SESSION BOOTSTRAP] no active server session | mode=manual");
+      }
     }
 
     function ensureBackgroundFlushLoop() {
@@ -1866,7 +1911,7 @@
 
 
     els.sessionToggleBtn.addEventListener("click", () => {
-      const action = sessionId ? stopSession() : startSession();
+      const action = sessionId ? stopSession() : startSession({ mode: "manual" });
       action.catch((e) => {
         setStatus(`Ошибка управления сессией: ${e.message}`, "bad");
         logLine(`[SESSION TOGGLE ERR] ${e.message}`);
@@ -1874,7 +1919,7 @@
     });
 
     els.startBtn.addEventListener("click", () => {
-      startSession().catch((e) => {
+      startSession({ mode: "manual" }).catch((e) => {
         setStatus(`Ошибка старта: ${e.message}`, "bad");
         logLine(`[START ERR] ${e.message}`);
       });
