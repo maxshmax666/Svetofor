@@ -136,6 +136,37 @@
       font-size:12px;
       white-space:pre-wrap;
     }
+    .log-filters {
+      display:flex;
+      flex-wrap:wrap;
+      gap:10px;
+      align-items:center;
+      margin:10px 0 8px;
+    }
+    .log-filter-group {
+      display:inline-flex;
+      align-items:center;
+      gap:8px;
+      padding:6px 8px;
+      border:1px solid var(--border);
+      border-radius:10px;
+      background:#111622;
+    }
+    .log-filter-group label {
+      display:inline-flex;
+      align-items:center;
+      gap:4px;
+      font-size:12px;
+      color:var(--muted);
+    }
+    .log-filter-group select {
+      border:1px solid var(--border);
+      border-radius:8px;
+      background:#0b0d11;
+      color:var(--text);
+      padding:4px 8px;
+      font-size:12px;
+    }
 
     .small { color:var(--muted); font-size:12px; }
     .mono { font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; }
@@ -368,6 +399,23 @@
           <div class="kv"><div class="k">Последнее server time</div><div class="v" id="lastServerTime">—</div></div>
           <div class="kv"><div class="k">Permission matrix</div><div class="v mono" id="permissionMatrix">geo=unknown | sync=unknown | motion=unknown | orientation=unknown | battery=unknown</div></div>
         </div>
+        <div class="log-filters">
+          <div class="log-filter-group" id="logCategoryFilters">
+            <label><input type="checkbox" value="VIDEO" checked>VIDEO</label>
+            <label><input type="checkbox" value="GPS" checked>GPS</label>
+            <label><input type="checkbox" value="SENSOR" checked>SENSOR</label>
+            <label><input type="checkbox" value="SYNC" checked>SYNC</label>
+            <label><input type="checkbox" value="SESSION" checked>SESSION</label>
+          </div>
+          <div class="log-filter-group">
+            <label for="logLevelFilter">Min level</label>
+            <select id="logLevelFilter">
+              <option value="info">info</option>
+              <option value="warn">warn</option>
+              <option value="error">error</option>
+            </select>
+          </div>
+        </div>
         <div style="margin-top:10px;">
           <div class="logbox" id="logView">Пока пусто.</div>
         </div>
@@ -450,6 +498,17 @@
 
     const SENSOR_THROTTLE_MS = 200;
     const VIDEO_CHUNK_MS = 5000;
+    const LOG_LEVEL_ORDER = { info: 1, warn: 2, error: 3 };
+    const LOG_CATEGORIES = ["VIDEO", "GPS", "SENSOR", "SYNC", "SESSION"];
+    const LOG_MAX_ENTRIES = 300;
+    const LOG_RENDER_LIMIT = 150;
+    const GPS_TIMEOUT_SUPPRESS_MS = 30000;
+    const logEntries = [];
+    const throttledLogState = new Map();
+    const logFilterState = {
+      categories: new Set(LOG_CATEGORIES),
+      minLevel: "info"
+    };
     let lastAccelAt = 0;
     let lastGyroAt = 0;
     let lastOrientAt = 0;
@@ -478,6 +537,8 @@
       videoFileMeta: document.getElementById("videoFileMeta"),
       videoPreview: document.getElementById("videoPreview"),
       permissionMatrix: document.getElementById("permissionMatrix"),
+      logLevelFilter: document.getElementById("logLevelFilter"),
+      logCategoryFilters: document.getElementById("logCategoryFilters"),
       pointMarkDialog: document.getElementById("pointMarkDialog"),
       pointMarkForm: document.getElementById("pointMarkForm"),
       pointMarkSummary: document.getElementById("pointMarkSummary"),
@@ -993,10 +1054,101 @@
       els.status.textContent = text;
     }
 
-    function logLine(text) {
-      const lines = els.logView.textContent ? els.logView.textContent.split("\n") : [];
-      lines.unshift(text);
-      els.logView.textContent = lines.slice(0, 150).join("\n");
+    function logLine(input) {
+      const entry = normalizeLogEntry(input);
+      logEntries.unshift(entry);
+      if (logEntries.length > LOG_MAX_ENTRIES) {
+        logEntries.length = LOG_MAX_ENTRIES;
+      }
+      renderLogView();
+    }
+
+    function normalizeLogEntry(raw) {
+      if (typeof raw === "string") {
+        const message = raw;
+        return {
+          category: inferCategory(message),
+          level: inferLevel(message),
+          message,
+          ts: Date.now()
+        };
+      }
+      const message = String(raw?.message ?? "");
+      return {
+        category: LOG_CATEGORIES.includes(raw?.category) ? raw.category : inferCategory(message),
+        level: LOG_LEVEL_ORDER[raw?.level] ? raw.level : inferLevel(message),
+        message,
+        ts: Number.isFinite(raw?.ts) ? raw.ts : Date.now()
+      };
+    }
+
+    function inferCategory(message) {
+      const src = String(message || "").toUpperCase();
+      if (src.includes("[VIDEO")) return "VIDEO";
+      if (src.includes("[GPS") || src.includes("[POINT")) return "GPS";
+      if (src.includes("[SENSOR") || src.includes("[PERMISSION")) return "SENSOR";
+      if (src.includes("[SYNC") || src.includes("[OUTBOX") || src.includes("[SW")) return "SYNC";
+      return "SESSION";
+    }
+
+    function inferLevel(message) {
+      const src = String(message || "").toUpperCase();
+      if (src.includes(" ERR]") || src.includes("[ERR") || src.includes(" ERROR")) return "error";
+      if (src.includes(" WARN]") || src.includes("[WARN")) return "warn";
+      return "info";
+    }
+
+    function renderLogView() {
+      const minLevelWeight = LOG_LEVEL_ORDER[logFilterState.minLevel] || LOG_LEVEL_ORDER.info;
+      const filtered = logEntries.filter((entry) =>
+        logFilterState.categories.has(entry.category) &&
+        (LOG_LEVEL_ORDER[entry.level] || LOG_LEVEL_ORDER.info) >= minLevelWeight
+      );
+      if (!filtered.length) {
+        els.logView.textContent = "Нет записей по текущему фильтру.";
+        return;
+      }
+      const rows = filtered.slice(0, LOG_RENDER_LIMIT).map((entry) => {
+        const ts = new Date(entry.ts).toLocaleTimeString("ru-RU");
+        return `[${ts}] [${entry.level.toUpperCase()}] [${entry.category}] ${entry.message}`;
+      });
+      els.logView.textContent = rows.join("\n");
+    }
+
+    function logLineThrottled(entry, key, intervalMs) {
+      const now = Date.now();
+      const prev = throttledLogState.get(key);
+      if (prev && now - prev.lastTs < intervalMs) {
+        prev.suppressed += 1;
+        throttledLogState.set(key, prev);
+        return false;
+      }
+      const suppressedSuffix = prev?.suppressed ? ` | suppressed=${prev.suppressed}` : "";
+      throttledLogState.set(key, { lastTs: now, suppressed: 0 });
+      logLine({
+        ...entry,
+        message: `${entry.message}${suppressedSuffix}`
+      });
+      return true;
+    }
+
+    function bindLogFilters() {
+      if (els.logLevelFilter) {
+        els.logLevelFilter.addEventListener("change", () => {
+          logFilterState.minLevel = els.logLevelFilter.value;
+          renderLogView();
+        });
+      }
+      if (els.logCategoryFilters) {
+        els.logCategoryFilters.addEventListener("change", () => {
+          const selected = new Set(
+            [...els.logCategoryFilters.querySelectorAll('input[type="checkbox"]:checked')]
+              .map((input) => input.value)
+          );
+          logFilterState.categories = selected.size ? selected : new Set(LOG_CATEGORIES);
+          renderLogView();
+        });
+      }
     }
 
     function renderPermissionMatrix() {
@@ -1639,7 +1791,15 @@
       const mappedStatus = codeName === "PERMISSION_DENIED" ? "denied" : "error";
       logPermission("geo", mappedStatus, `code=${codeName}(${err.code}) | ${err.message}`);
       setStatus(`GPS ошибка: ${err.code} ${err.message}`, "bad");
-      logLine(`[GPS ERR] ${err.code} ${codeName} ${err.message}`);
+      if (codeName === "TIMEOUT") {
+        logLineThrottled(
+          { category: "GPS", level: "warn", message: `[GPS TIMEOUT] ${err.code} ${codeName} ${err.message}` },
+          `gps-timeout:${err.code}:${err.message || ""}`,
+          GPS_TIMEOUT_SUPPRESS_MS
+        );
+        return;
+      }
+      logLine({ category: "GPS", level: "error", message: `[GPS ERR] ${err.code} ${codeName} ${err.message}` });
     }
 
     async function bootstrapSession() {
@@ -1835,6 +1995,7 @@
       });
     });
     resetPointMarkForm();
+    bindLogFilters();
     updateVideoUi();
   </script>
 </body>
