@@ -404,7 +404,12 @@
           <div class="kv"><div class="k">Sensor events</div><div class="v" id="sensorCount">0</div></div>
           <div class="kv"><div class="k">Последнее client time</div><div class="v" id="lastClientTime">—</div></div>
           <div class="kv"><div class="k">Последнее server time</div><div class="v" id="lastServerTime">—</div></div>
-          <div class="kv"><div class="k">Permission matrix</div><div class="v mono" id="permissionMatrix">geo=unknown | camera=unknown | sync=unknown | motion=unknown | orientation=unknown | battery=unknown</div></div>
+          <div class="kv"><div class="k">Permission matrix</div><div class="v mono" id="permissionMatrix">geo=unknown | camera=unknown | microphone=unknown | notifications=unknown | sync=unknown | motion=unknown | orientation=unknown | battery=unknown</div></div>
+          <div class="kv"><div class="k">Видео готовность</div><div class="v mono" id="videoReadiness">secure_context=unknown | mediaDevices=unknown | mediaRecorder=unknown | camera_permission=unknown</div></div>
+        </div>
+        <div class="small" style="margin-top:8px;">
+          Легенда: <span class="mono">unavailable</span> = API не поддерживается устройством/браузером;
+          <span class="mono">denied</span> = явный запрет пользователя/системы.
         </div>
         <div class="log-filters">
           <div class="log-filter-group" id="logCategoryFilters">
@@ -500,11 +505,15 @@
     const permissionMatrix = {
       geo: "unknown",
       camera: "unknown",
+      microphone: "unknown",
+      notifications: "unknown",
       sync: "unknown",
       motion: "unknown",
       orientation: "unknown",
       battery: "unknown"
     };
+    const PERMISSION_REASONS = new Set(["api_unavailable", "browser_policy", "user_denied", "system_denied"]);
+    const PERMISSION_SOURCES = new Set(["permissions_api", "getUserMedia", "DeviceMotion.requestPermission"]);
 
     const SENSOR_THROTTLE_MS = 200;
     const VIDEO_CHUNK_MS = 5000;
@@ -548,6 +557,7 @@
       videoFileMeta: document.getElementById("videoFileMeta"),
       videoPreview: document.getElementById("videoPreview"),
       permissionMatrix: document.getElementById("permissionMatrix"),
+      videoReadiness: document.getElementById("videoReadiness"),
       logLevelFilter: document.getElementById("logLevelFilter"),
       logCategoryFilters: document.getElementById("logCategoryFilters"),
       pointMarkDialog: document.getElementById("pointMarkDialog"),
@@ -1185,18 +1195,31 @@
 
     function renderPermissionMatrix() {
       if (!els.permissionMatrix) return;
-      els.permissionMatrix.textContent = `geo=${permissionMatrix.geo} | camera=${permissionMatrix.camera} | sync=${permissionMatrix.sync} | motion=${permissionMatrix.motion} | orientation=${permissionMatrix.orientation} | battery=${permissionMatrix.battery}`;
+      els.permissionMatrix.textContent = `geo=${permissionMatrix.geo} | camera=${permissionMatrix.camera} | microphone=${permissionMatrix.microphone} | notifications=${permissionMatrix.notifications} | sync=${permissionMatrix.sync} | motion=${permissionMatrix.motion} | orientation=${permissionMatrix.orientation} | battery=${permissionMatrix.battery}`;
+      renderVideoReadiness();
     }
 
-    function logPermission(scope, status, details = "") {
+    function renderVideoReadiness() {
+      if (!els.videoReadiness) return;
+      const secureContextStatus = window.isSecureContext ? "ok" : "unavailable";
+      const mediaDevicesStatus = navigator.mediaDevices?.getUserMedia ? "ok" : "unavailable";
+      const mediaRecorderStatus = window.MediaRecorder ? "ok" : "unavailable";
+      const cameraPermissionStatus = permissionMatrix.camera || "unknown";
+      els.videoReadiness.textContent = `secure_context=${secureContextStatus} | mediaDevices=${mediaDevicesStatus} | mediaRecorder=${mediaRecorderStatus} | camera_permission=${cameraPermissionStatus}`;
+    }
+
+    function logPermission(scope, status, metadata = {}) {
       const normalizedScope = String(scope || "unknown");
       const normalizedStatus = String(status || "unknown");
+      const meta = typeof metadata === "string" ? { details: metadata } : (metadata || {});
       if (Object.prototype.hasOwnProperty.call(permissionMatrix, normalizedScope)) {
         permissionMatrix[normalizedScope] = normalizedStatus;
         renderPermissionMatrix();
       }
-      const suffix = details ? ` | ${details}` : "";
-      logLine(`[PERMISSION ${normalizedScope}] ${normalizedStatus}${suffix}`);
+      const reason = PERMISSION_REASONS.has(meta.reason) ? meta.reason : "api_unavailable";
+      const source = PERMISSION_SOURCES.has(meta.source) ? meta.source : "permissions_api";
+      const details = meta.details ? ` | details=${meta.details}` : "";
+      logLine(`[PERMISSION ${normalizedScope}] status=${normalizedStatus} | reason=${reason} | source=${source}${details}`);
     }
 
     renderPermissionMatrix();
@@ -1387,27 +1410,77 @@
       try {
         if (typeof DeviceMotionEvent !== "undefined" && typeof DeviceMotionEvent.requestPermission === "function") {
           const motion = await DeviceMotionEvent.requestPermission();
-          logPermission("motion", motion === "granted" ? "granted" : "denied", `code=motion:${motion}`);
+          logPermission("motion", motion === "granted" ? "granted" : "denied", {
+            reason: motion === "granted" ? "browser_policy" : "user_denied",
+            source: "DeviceMotion.requestPermission",
+            details: `code=motion:${motion}`
+          });
           logLine(`[PERMISSION] DeviceMotion: ${motion}`);
         } else {
-          logPermission("motion", "unavailable", "DeviceMotion requestPermission is unavailable");
+          logPermission("motion", "unavailable", {
+            reason: "api_unavailable",
+            source: "DeviceMotion.requestPermission",
+            details: "DeviceMotion requestPermission is unavailable"
+          });
         }
       } catch (e) {
-        logPermission("motion", "error", `code=motion:error | ${e.message}`);
+        logPermission("motion", "error", {
+          reason: "system_denied",
+          source: "DeviceMotion.requestPermission",
+          details: `code=motion:error | ${e.message}`
+        });
         logLine(`[PERMISSION WARN] DeviceMotion: ${e.message}`);
       }
 
       try {
         if (typeof DeviceOrientationEvent !== "undefined" && typeof DeviceOrientationEvent.requestPermission === "function") {
           const orient = await DeviceOrientationEvent.requestPermission();
-          logPermission("orientation", orient === "granted" ? "granted" : "denied", `code=orientation:${orient}`);
+          logPermission("orientation", orient === "granted" ? "granted" : "denied", {
+            reason: orient === "granted" ? "browser_policy" : "user_denied",
+            source: "DeviceMotion.requestPermission",
+            details: `code=orientation:${orient}`
+          });
           logLine(`[PERMISSION] DeviceOrientation: ${orient}`);
         } else {
-          logPermission("orientation", "unavailable", "DeviceOrientation requestPermission is unavailable");
+          logPermission("orientation", "unavailable", {
+            reason: "api_unavailable",
+            source: "DeviceMotion.requestPermission",
+            details: "DeviceOrientation requestPermission is unavailable"
+          });
         }
       } catch (e) {
-        logPermission("orientation", "error", `code=orientation:error | ${e.message}`);
+        logPermission("orientation", "error", {
+          reason: "system_denied",
+          source: "DeviceMotion.requestPermission",
+          details: `code=orientation:error | ${e.message}`
+        });
         logLine(`[PERMISSION WARN] DeviceOrientation: ${e.message}`);
+      }
+    }
+
+    async function queryPermissionState(permissionName, scope) {
+      if (!navigator.permissions?.query) {
+        logPermission(scope, "unavailable", {
+          reason: "api_unavailable",
+          source: "permissions_api",
+          details: "Permissions API unavailable"
+        });
+        return;
+      }
+      try {
+        const result = await navigator.permissions.query({ name: permissionName });
+        const normalizedState = result.state === "prompt" ? "unknown" : result.state;
+        logPermission(scope, normalizedState, {
+          reason: normalizedState === "denied" ? "user_denied" : "browser_policy",
+          source: "permissions_api",
+          details: `state=${result.state}`
+        });
+      } catch (e) {
+        logPermission(scope, "unavailable", {
+          reason: "api_unavailable",
+          source: "permissions_api",
+          details: `${permissionName}: ${e?.message || "query failed"}`
+        });
       }
     }
 
@@ -1416,10 +1489,18 @@
         geo: { state: "unknown", reason: "" },
         camera: { state: "unknown", reason: "" }
       };
+      await queryPermissionState("camera", "camera");
+      await queryPermissionState("microphone", "microphone");
+      await queryPermissionState("notifications", "notifications");
+      await queryPermissionState("geolocation", "geo");
 
       if (!navigator.geolocation) {
         result.geo = { state: "error", reason: "Geolocation API недоступен" };
-        logPermission("geo", "error", result.geo.reason);
+        logPermission("geo", "unavailable", {
+          reason: "api_unavailable",
+          source: "permissions_api",
+          details: result.geo.reason
+        });
       } else {
         try {
           await new Promise((resolve, reject) => {
@@ -1439,7 +1520,11 @@
             );
           });
           result.geo = { state: "granted", reason: "probe=getCurrentPosition" };
-          logPermission("geo", "granted", result.geo.reason);
+          logPermission("geo", "granted", {
+            reason: "browser_policy",
+            source: "permissions_api",
+            details: result.geo.reason
+          });
         } catch (error) {
           const isDenied = Number(error?.code) === 1 || error?.name === "NotAllowedError";
           const status = isDenied ? "denied" : "error";
@@ -1447,20 +1532,32 @@
             ? "Доступ к геопозиции запрещён"
             : (error?.message || "Ошибка проверки геопозиции");
           result.geo = { state: status, reason };
-          logPermission("geo", status, `probe=getCurrentPosition | ${reason}`);
+          logPermission("geo", status, {
+            reason: isDenied ? "user_denied" : "system_denied",
+            source: "permissions_api",
+            details: `probe=getCurrentPosition | ${reason}`
+          });
         }
       }
 
       if (!navigator.mediaDevices?.getUserMedia) {
         result.camera = { state: "error", reason: "getUserMedia недоступен" };
-        logPermission("camera", "error", result.camera.reason);
+        logPermission("camera", "unavailable", {
+          reason: "api_unavailable",
+          source: "getUserMedia",
+          details: result.camera.reason
+        });
       } else {
         let probeStream = null;
         try {
           probeStream = await navigator.mediaDevices.getUserMedia({ video: true, audio: false });
           probeStream.getTracks().forEach((track) => track.stop());
           result.camera = { state: "granted", reason: "probe=getUserMedia" };
-          logPermission("camera", "granted", result.camera.reason);
+          logPermission("camera", "granted", {
+            reason: "browser_policy",
+            source: "getUserMedia",
+            details: result.camera.reason
+          });
         } catch (error) {
           if (probeStream) {
             probeStream.getTracks().forEach((track) => track.stop());
@@ -1468,7 +1565,11 @@
           const mappedMessage = mapGetUserMediaErrorMessage(error);
           const status = error?.name === "NotAllowedError" ? "denied" : "error";
           result.camera = { state: status, reason: mappedMessage };
-          logPermission("camera", status, `probe=getUserMedia | ${mappedMessage}`);
+          logPermission("camera", status, {
+            reason: error?.name === "NotAllowedError" ? "user_denied" : "system_denied",
+            source: "getUserMedia",
+            details: `probe=getUserMedia | ${mappedMessage}`
+          });
         }
       }
 
