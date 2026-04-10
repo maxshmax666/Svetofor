@@ -404,7 +404,7 @@
           <div class="kv"><div class="k">Sensor events</div><div class="v" id="sensorCount">0</div></div>
           <div class="kv"><div class="k">Последнее client time</div><div class="v" id="lastClientTime">—</div></div>
           <div class="kv"><div class="k">Последнее server time</div><div class="v" id="lastServerTime">—</div></div>
-          <div class="kv"><div class="k">Permission matrix</div><div class="v mono" id="permissionMatrix">geo=unknown | sync=unknown | motion=unknown | orientation=unknown | battery=unknown</div></div>
+          <div class="kv"><div class="k">Permission matrix</div><div class="v mono" id="permissionMatrix">geo=unknown | camera=unknown | sync=unknown | motion=unknown | orientation=unknown | battery=unknown</div></div>
         </div>
         <div class="log-filters">
           <div class="log-filter-group" id="logCategoryFilters">
@@ -495,9 +495,11 @@
     const SESSION_STATE_KEY = "gps-logger-active-session-v1";
     const BACKGROUND_FLUSH_INTERVAL_MS = 15000;
     const AUTO_START_SESSION = false;
+    const VIDEO_REQUIRED_FOR_SESSION = false;
     let syncInfoLoggedOnce = false;
     const permissionMatrix = {
       geo: "unknown",
+      camera: "unknown",
       sync: "unknown",
       motion: "unknown",
       orientation: "unknown",
@@ -609,7 +611,10 @@
       if (mode === "resume") {
         return "Смена восстановлена с сервера.";
       }
-      return "Ручной запуск смены.";
+      if (VIDEO_REQUIRED_FOR_SESSION) {
+        return "Ручной запуск смены. Видео обязательно: при отказе доступа к камере старт будет заблокирован.";
+      }
+      return "Ручной запуск смены. Видео опционально: при отказе доступ к GPS сохранится, но запись видео будет недоступна.";
     }
 
     function updateSessionToggleUi({ mode = "manual" } = {}) {
@@ -641,6 +646,29 @@
           ? `Не активно: ${startBlockedReason}`
           : "Не активно";
       updateSessionToggleUi({ mode });
+    }
+
+    function mapGetUserMediaErrorMessage(error) {
+      switch (error?.name) {
+        case "NotAllowedError":
+          return "Доступ к камере запрещён в браузере/системе";
+        case "NotFoundError":
+          return "Камера не найдена";
+        case "NotReadableError":
+          return "Камера занята другим приложением";
+        default:
+          return `Не удалось включить камеру: ${error?.message || "неизвестная ошибка"}`;
+      }
+    }
+
+    function hasIOSPermissionRequestApi() {
+      const canRequestMotion =
+        typeof DeviceMotionEvent !== "undefined" &&
+        typeof DeviceMotionEvent.requestPermission === "function";
+      const canRequestOrientation =
+        typeof DeviceOrientationEvent !== "undefined" &&
+        typeof DeviceOrientationEvent.requestPermission === "function";
+      return canRequestMotion || canRequestOrientation;
     }
 
     function buildVideoFilename({ session, startedAtMs, stoppedAtMs, extension }) {
@@ -708,34 +736,6 @@
 
       videoStartBlockedReason = "";
       videoMimeType = chooseVideoMimeType();
-
-      if (navigator.permissions?.query) {
-        try {
-          const cameraPermission = await navigator.permissions.query({ name: "camera" });
-          if (cameraPermission.state === "denied") {
-            videoStartBlockedReason = "Доступ к камере запрещён в браузере/системе";
-            setStatus("Доступ к камере запрещён в браузере/системе", "bad");
-            logLine("[VIDEO PERMISSION] camera=denied");
-            updateVideoUi();
-            return;
-          }
-        } catch (permissionErr) {
-          logLine(`[VIDEO PERMISSION WARN] ${permissionErr.message || permissionErr}`);
-        }
-      }
-
-      const mapGetUserMediaErrorMessage = (error) => {
-        switch (error?.name) {
-          case "NotAllowedError":
-            return "Доступ к камере запрещён в браузере/системе";
-          case "NotFoundError":
-            return "Камера не найдена";
-          case "NotReadableError":
-            return "Камера занята другим приложением";
-          default:
-            return `Не удалось включить камеру: ${error?.message || "неизвестная ошибка"}`;
-        }
-      };
 
       let stream = null;
       try {
@@ -1185,7 +1185,7 @@
 
     function renderPermissionMatrix() {
       if (!els.permissionMatrix) return;
-      els.permissionMatrix.textContent = `geo=${permissionMatrix.geo} | sync=${permissionMatrix.sync} | motion=${permissionMatrix.motion} | orientation=${permissionMatrix.orientation} | battery=${permissionMatrix.battery}`;
+      els.permissionMatrix.textContent = `geo=${permissionMatrix.geo} | camera=${permissionMatrix.camera} | sync=${permissionMatrix.sync} | motion=${permissionMatrix.motion} | orientation=${permissionMatrix.orientation} | battery=${permissionMatrix.battery}`;
     }
 
     function logPermission(scope, status, details = "") {
@@ -1411,6 +1411,74 @@
       }
     }
 
+    async function requestRuntimePermissions() {
+      const result = {
+        geo: { state: "unknown", reason: "" },
+        camera: { state: "unknown", reason: "" }
+      };
+
+      if (!navigator.geolocation) {
+        result.geo = { state: "error", reason: "Geolocation API недоступен" };
+        logPermission("geo", "error", result.geo.reason);
+      } else {
+        try {
+          await new Promise((resolve, reject) => {
+            const hardTimeout = window.setTimeout(() => {
+              reject(new Error("Geolocation timeout"));
+            }, 3500);
+            navigator.geolocation.getCurrentPosition(
+              () => {
+                window.clearTimeout(hardTimeout);
+                resolve();
+              },
+              (error) => {
+                window.clearTimeout(hardTimeout);
+                reject(error);
+              },
+              { enableHighAccuracy: true, maximumAge: 0, timeout: 2500 }
+            );
+          });
+          result.geo = { state: "granted", reason: "probe=getCurrentPosition" };
+          logPermission("geo", "granted", result.geo.reason);
+        } catch (error) {
+          const isDenied = Number(error?.code) === 1 || error?.name === "NotAllowedError";
+          const status = isDenied ? "denied" : "error";
+          const reason = isDenied
+            ? "Доступ к геопозиции запрещён"
+            : (error?.message || "Ошибка проверки геопозиции");
+          result.geo = { state: status, reason };
+          logPermission("geo", status, `probe=getCurrentPosition | ${reason}`);
+        }
+      }
+
+      if (!navigator.mediaDevices?.getUserMedia) {
+        result.camera = { state: "error", reason: "getUserMedia недоступен" };
+        logPermission("camera", "error", result.camera.reason);
+      } else {
+        let probeStream = null;
+        try {
+          probeStream = await navigator.mediaDevices.getUserMedia({ video: true, audio: false });
+          probeStream.getTracks().forEach((track) => track.stop());
+          result.camera = { state: "granted", reason: "probe=getUserMedia" };
+          logPermission("camera", "granted", result.camera.reason);
+        } catch (error) {
+          if (probeStream) {
+            probeStream.getTracks().forEach((track) => track.stop());
+          }
+          const mappedMessage = mapGetUserMediaErrorMessage(error);
+          const status = error?.name === "NotAllowedError" ? "denied" : "error";
+          result.camera = { state: status, reason: mappedMessage };
+          logPermission("camera", status, `probe=getUserMedia | ${mappedMessage}`);
+        }
+      }
+
+      if (hasIOSPermissionRequestApi()) {
+        await ensureIOSPermissions();
+      }
+
+      return result;
+    }
+
     function applySessionUi(meta) {
       const normalized = normalizeSessionMeta(meta);
       if (!normalized.sessionId) {
@@ -1436,7 +1504,6 @@
         navigator.geolocation.clearWatch(watchId);
       }
 
-      await ensureIOSPermissions();
       await requestWakeLock();
       bindSensorListeners();
       watchId = navigator.geolocation.watchPosition(onPosition, onPositionError, {
@@ -1456,6 +1523,26 @@
 
       isSessionStarting = true;
       try {
+        const runtimePermissions = await requestRuntimePermissions();
+        let sessionWarningMessage = "";
+        if (runtimePermissions.geo.state !== "granted") {
+          throw new Error("Старт смены заблокирован: доступ к геолокации обязателен");
+        }
+        if (runtimePermissions.camera.state === "denied") {
+          if (VIDEO_REQUIRED_FOR_SESSION) {
+            throw new Error("Старт смены заблокирован: доступ к камере обязателен");
+          }
+          videoStartBlockedReason = "Видео недоступно: доступ к камере запрещён";
+          logLine("[VIDEO STATUS] Видео недоступно: доступ к камере запрещён");
+          sessionWarningMessage = "Смена запущена без видео: доступ к камере запрещён";
+        } else if (runtimePermissions.camera.state === "error") {
+          videoStartBlockedReason = `Видео недоступно: ${runtimePermissions.camera.reason}`;
+          logLine(`[VIDEO STATUS] ${videoStartBlockedReason}`);
+          sessionWarningMessage = `Смена запущена без видео: ${runtimePermissions.camera.reason}`;
+        } else {
+          videoStartBlockedReason = "";
+        }
+
         const payload = {
           userAgent: navigator.userAgent,
           platformHint: "android",
@@ -1469,10 +1556,14 @@
 
         const data = await postJson("/api/session/start", payload);
         applySessionUi(data.session || {});
-        setStatus(`Сессия создана, запускаю GPS и датчики... (mode=${mode})`, "ok");
+        setStatus(
+          sessionWarningMessage || `Сессия создана, запускаю GPS и датчики... (mode=${mode})`,
+          sessionWarningMessage ? "warn" : "ok"
+        );
         logLine(`[SESSION START] ${sessionId} | mode=${mode}`);
         updateSessionToggleUi({ mode });
         await activateRealtimeCapture();
+        updateVideoUi({ mode });
       } finally {
         isSessionStarting = false;
       }
