@@ -365,6 +365,7 @@
           <div class="kv"><div class="k">Sensor events</div><div class="v" id="sensorCount">0</div></div>
           <div class="kv"><div class="k">Последнее client time</div><div class="v" id="lastClientTime">—</div></div>
           <div class="kv"><div class="k">Последнее server time</div><div class="v" id="lastServerTime">—</div></div>
+          <div class="kv"><div class="k">Permission matrix</div><div class="v mono" id="permissionMatrix">geo=unknown | sync=unknown | motion=unknown | orientation=unknown | battery=unknown</div></div>
         </div>
         <div style="margin-top:10px;">
           <div class="logbox" id="logView">Пока пусто.</div>
@@ -437,6 +438,13 @@
     const SESSION_STATE_KEY = "gps-logger-active-session-v1";
     const BACKGROUND_FLUSH_INTERVAL_MS = 15000;
     let syncInfoLoggedOnce = false;
+    const permissionMatrix = {
+      geo: "unknown",
+      sync: "unknown",
+      motion: "unknown",
+      orientation: "unknown",
+      battery: "unknown"
+    };
 
     const SENSOR_THROTTLE_MS = 200;
     const VIDEO_CHUNK_MS = 5000;
@@ -466,6 +474,7 @@
       videoStatus: document.getElementById("videoStatus"),
       videoFileMeta: document.getElementById("videoFileMeta"),
       videoPreview: document.getElementById("videoPreview"),
+      permissionMatrix: document.getElementById("permissionMatrix"),
       pointMarkDialog: document.getElementById("pointMarkDialog"),
       pointMarkForm: document.getElementById("pointMarkForm"),
       pointMarkSummary: document.getElementById("pointMarkSummary"),
@@ -780,6 +789,8 @@
       };
 
       if (!window.isSecureContext || !("serviceWorker" in navigator)) {
+        logPermission("sync", "unavailable", "Background Sync requires secure context and service worker");
+        logPermission("background_sync", "unavailable", "Background Sync requires secure context and service worker");
         logSyncInfoOnce("[SYNC INFO] Background Sync not supported; using in-page flush loop");
         return;
       }
@@ -787,10 +798,14 @@
       try {
         const registration = await navigator.serviceWorker.ready;
         if (!registration.sync?.register) {
+          logPermission("sync", "unavailable", "ServiceWorkerRegistration.sync.register is unavailable");
+          logPermission("background_sync", "unavailable", "ServiceWorkerRegistration.sync.register is unavailable");
           logSyncInfoOnce("[SYNC INFO] Background Sync not supported; using in-page flush loop");
           return;
         }
         await registration.sync.register(OUTBOX_SYNC_TAG);
+        logPermission("sync", "granted", `tag=${OUTBOX_SYNC_TAG}`);
+        logPermission("background_sync", "granted", `tag=${OUTBOX_SYNC_TAG}`);
       } catch (e) {
         const name = typeof e?.name === "string" ? e.name : "";
         const message = typeof e?.message === "string" ? e.message : String(e || "");
@@ -798,10 +813,14 @@
           name === "NotAllowedError" || /permission denied/i.test(message);
 
         if (isPermissionError) {
+          logPermission("sync", "denied", message || "permission denied");
+          logPermission("background_sync", "denied", message || "permission denied");
           logSyncInfoOnce("[SYNC INFO] Background Sync not supported; using in-page flush loop");
           return;
         }
 
+        logPermission("sync", "error", message || "Background Sync register failed");
+        logPermission("background_sync", "error", message || "Background Sync register failed");
         logLine(`[SYNC WARN] ${message}`);
       }
     }
@@ -900,6 +919,24 @@
       lines.unshift(text);
       els.logView.textContent = lines.slice(0, 150).join("\n");
     }
+
+    function renderPermissionMatrix() {
+      if (!els.permissionMatrix) return;
+      els.permissionMatrix.textContent = `geo=${permissionMatrix.geo} | sync=${permissionMatrix.sync} | motion=${permissionMatrix.motion} | orientation=${permissionMatrix.orientation} | battery=${permissionMatrix.battery}`;
+    }
+
+    function logPermission(scope, status, details = "") {
+      const normalizedScope = String(scope || "unknown");
+      const normalizedStatus = String(status || "unknown");
+      if (Object.prototype.hasOwnProperty.call(permissionMatrix, normalizedScope)) {
+        permissionMatrix[normalizedScope] = normalizedStatus;
+        renderPermissionMatrix();
+      }
+      const suffix = details ? ` | ${details}` : "";
+      logLine(`[PERMISSION ${normalizedScope}] ${normalizedStatus}${suffix}`);
+    }
+
+    renderPermissionMatrix();
 
     function formatLocal(ms) {
       return new Date(ms).toLocaleString("ru-RU", {
@@ -1052,13 +1089,18 @@
 
     async function getBatteryLevel() {
       try {
-        if (!navigator.getBattery) return { batteryLevel: null, isCharging: null };
+        if (!navigator.getBattery) {
+          logPermission("battery", "unavailable", "Battery API is not supported");
+          return { batteryLevel: null, isCharging: null };
+        }
         if (!batteryRef) batteryRef = await navigator.getBattery();
+        logPermission("battery", "granted");
         return {
           batteryLevel: Math.round(batteryRef.level * 100),
           isCharging: !!batteryRef.charging
         };
-      } catch {
+      } catch (e) {
+        logPermission("battery", "error", e?.message || "Battery API failed");
         return { batteryLevel: null, isCharging: null };
       }
     }
@@ -1082,18 +1124,26 @@
       try {
         if (typeof DeviceMotionEvent !== "undefined" && typeof DeviceMotionEvent.requestPermission === "function") {
           const motion = await DeviceMotionEvent.requestPermission();
+          logPermission("motion", motion === "granted" ? "granted" : "denied", `code=motion:${motion}`);
           logLine(`[PERMISSION] DeviceMotion: ${motion}`);
+        } else {
+          logPermission("motion", "unavailable", "DeviceMotion requestPermission is unavailable");
         }
       } catch (e) {
+        logPermission("motion", "error", `code=motion:error | ${e.message}`);
         logLine(`[PERMISSION WARN] DeviceMotion: ${e.message}`);
       }
 
       try {
         if (typeof DeviceOrientationEvent !== "undefined" && typeof DeviceOrientationEvent.requestPermission === "function") {
           const orient = await DeviceOrientationEvent.requestPermission();
+          logPermission("orientation", orient === "granted" ? "granted" : "denied", `code=orientation:${orient}`);
           logLine(`[PERMISSION] DeviceOrientation: ${orient}`);
+        } else {
+          logPermission("orientation", "unavailable", "DeviceOrientation requestPermission is unavailable");
         }
       } catch (e) {
+        logPermission("orientation", "error", `code=orientation:error | ${e.message}`);
         logLine(`[PERMISSION WARN] DeviceOrientation: ${e.message}`);
       }
     }
@@ -1428,6 +1478,7 @@
     }
 
     async function onPosition(pos) {
+      logPermission("geo", "granted");
       if (!sessionId) return;
 
       try {
@@ -1500,8 +1551,16 @@
     }
 
     function onPositionError(err) {
+      const codeMap = {
+        1: "PERMISSION_DENIED",
+        2: "POSITION_UNAVAILABLE",
+        3: "TIMEOUT"
+      };
+      const codeName = codeMap[Number(err?.code)] || "UNKNOWN";
+      const mappedStatus = codeName === "PERMISSION_DENIED" ? "denied" : "error";
+      logPermission("geo", mappedStatus, `code=${codeName}(${err.code}) | ${err.message}`);
       setStatus(`GPS ошибка: ${err.code} ${err.message}`, "bad");
-      logLine(`[GPS ERR] ${err.code} ${err.message}`);
+      logLine(`[GPS ERR] ${err.code} ${codeName} ${err.message}`);
     }
 
     async function bootstrapSession() {
