@@ -436,6 +436,7 @@
     const OUTBOX_MAX_ITEMS = 5000;
     const SESSION_STATE_KEY = "gps-logger-active-session-v1";
     const BACKGROUND_FLUSH_INTERVAL_MS = 15000;
+    let syncInfoLoggedOnce = false;
 
     const SENSOR_THROTTLE_MS = 200;
     const VIDEO_CHUNK_MS = 5000;
@@ -772,14 +773,36 @@
     }
 
     async function registerOutboxSync() {
-      if (!("serviceWorker" in navigator)) return;
+      const logSyncInfoOnce = (message) => {
+        if (syncInfoLoggedOnce) return;
+        syncInfoLoggedOnce = true;
+        logLine(message);
+      };
+
+      if (!window.isSecureContext || !("serviceWorker" in navigator)) {
+        logSyncInfoOnce("[SYNC INFO] Background Sync not supported; using in-page flush loop");
+        return;
+      }
+
       try {
         const registration = await navigator.serviceWorker.ready;
-        if (registration.sync && registration.sync.register) {
-          await registration.sync.register(OUTBOX_SYNC_TAG);
+        if (!registration.sync?.register) {
+          logSyncInfoOnce("[SYNC INFO] Background Sync not supported; using in-page flush loop");
+          return;
         }
+        await registration.sync.register(OUTBOX_SYNC_TAG);
       } catch (e) {
-        logLine(`[SYNC WARN] ${e.message}`);
+        const name = typeof e?.name === "string" ? e.name : "";
+        const message = typeof e?.message === "string" ? e.message : String(e || "");
+        const isPermissionError =
+          name === "NotAllowedError" || /permission denied/i.test(message);
+
+        if (isPermissionError) {
+          logSyncInfoOnce("[SYNC INFO] Background Sync not supported; using in-page flush loop");
+          return;
+        }
+
+        logLine(`[SYNC WARN] ${message}`);
       }
     }
 
