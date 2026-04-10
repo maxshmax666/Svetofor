@@ -546,12 +546,20 @@
     let batteryRef = null;
     let lastPointSnapshot = null;
     let videoStream = null;
+    let rawVideoStream = null;
+    let overlayVideoStream = null;
+    let overlayCanvas = null;
+    let overlayContext = null;
+    let overlaySourceVideo = null;
+    let overlayAnimationFrameId = null;
     let mediaRecorder = null;
     let videoMimeType = "";
     let videoStartedAtMs = null;
     let pendingVideoChunks = [];
     let isStoppingVideo = false;
     let videoStartBlockedReason = "";
+    let lastOverlayText = "";
+    let lastOverlayUpdateMs = 0;
 
     const POINT_MARK_ENDPOINT = "/api/point-comment";
     const MARK_DURATION_MIN = 16;
@@ -582,6 +590,7 @@
 
     const SENSOR_THROTTLE_MS = 200;
     const VIDEO_CHUNK_MS = 5000;
+    const VIDEO_OVERLAY_UPDATE_MS = 500;
     const LOG_LEVEL_ORDER = { info: 1, warn: 2, error: 3 };
     const LOG_CATEGORIES = ["VIDEO", "GPS", "SENSOR", "SYNC", "SESSION"];
     const LOG_MAX_ENTRIES = 300;
@@ -760,6 +769,76 @@
       return "webm";
     }
 
+    function formatOverlayTimestamp(nowMs) {
+      const iso = new Date(nowMs).toISOString().replace("T", " ").replace("Z", " UTC");
+      return iso;
+    }
+
+    async function buildOverlayRecordingStream(cameraStream) {
+      const [videoTrack] = cameraStream.getVideoTracks();
+      if (!videoTrack) {
+        throw new Error("В потоке камеры отсутствует видеотрек");
+      }
+
+      const settings = videoTrack.getSettings ? videoTrack.getSettings() : {};
+      const width = Number(settings.width) || 1280;
+      const height = Number(settings.height) || 720;
+      const fps = Number(settings.frameRate) || 30;
+
+      const sourceVideo = document.createElement("video");
+      sourceVideo.autoplay = true;
+      sourceVideo.muted = true;
+      sourceVideo.playsInline = true;
+      sourceVideo.srcObject = cameraStream;
+      await sourceVideo.play();
+
+      const canvas = document.createElement("canvas");
+      canvas.width = width;
+      canvas.height = height;
+      const ctx = canvas.getContext("2d", { alpha: false });
+      if (!ctx) {
+        throw new Error("Не удалось инициализировать canvas context для видеооверлея");
+      }
+
+      overlayCanvas = canvas;
+      overlayContext = ctx;
+      overlaySourceVideo = sourceVideo;
+      lastOverlayText = "";
+      lastOverlayUpdateMs = 0;
+
+      const drawFrame = () => {
+        if (!overlayContext || !overlaySourceVideo || !overlayCanvas) return;
+        overlayContext.drawImage(overlaySourceVideo, 0, 0, overlayCanvas.width, overlayCanvas.height);
+        const nowMs = Date.now();
+        if ((nowMs - lastOverlayUpdateMs) >= VIDEO_OVERLAY_UPDATE_MS || !lastOverlayText) {
+          lastOverlayText = formatOverlayTimestamp(nowMs);
+          lastOverlayUpdateMs = nowMs;
+        }
+
+        const paddingX = Math.max(14, Math.round(overlayCanvas.width * 0.012));
+        const fontPx = Math.max(20, Math.round(overlayCanvas.width * 0.024));
+        overlayContext.font = `600 ${fontPx}px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace`;
+        overlayContext.textBaseline = "top";
+        const textWidth = overlayContext.measureText(lastOverlayText).width;
+        const boxX = 12;
+        const boxY = 12;
+        const boxW = textWidth + (paddingX * 2);
+        const boxH = fontPx + 16;
+
+        overlayContext.fillStyle = "rgba(0, 0, 0, 0.55)";
+        overlayContext.fillRect(boxX, boxY, boxW, boxH);
+        overlayContext.fillStyle = "#FFFFFF";
+        overlayContext.fillText(lastOverlayText, boxX + paddingX, boxY + 8);
+
+        overlayAnimationFrameId = window.requestAnimationFrame(drawFrame);
+      };
+
+      drawFrame();
+
+      const stream = canvas.captureStream(Math.min(Math.max(fps, 24), 30));
+      return { stream, fps };
+    }
+
     function saveBlobToPhone(blob, filename) {
       const blobUrl = URL.createObjectURL(blob);
       const link = document.createElement("a");
@@ -773,10 +852,29 @@
     }
 
     function stopVideoStream() {
+      if (overlayAnimationFrameId !== null) {
+        window.cancelAnimationFrame(overlayAnimationFrameId);
+      }
+      overlayAnimationFrameId = null;
+      if (overlayVideoStream) {
+        overlayVideoStream.getTracks().forEach((track) => track.stop());
+      }
+      overlayVideoStream = null;
       if (videoStream) {
         videoStream.getTracks().forEach((track) => track.stop());
       }
       videoStream = null;
+      if (rawVideoStream) {
+        rawVideoStream.getTracks().forEach((track) => track.stop());
+      }
+      rawVideoStream = null;
+      overlayCanvas = null;
+      overlayContext = null;
+      if (overlaySourceVideo) {
+        overlaySourceVideo.pause();
+        overlaySourceVideo.srcObject = null;
+      }
+      overlaySourceVideo = null;
       if (els.videoPreview) {
         els.videoPreview.srcObject = null;
       }
@@ -840,14 +938,32 @@
       }
 
       videoStartBlockedReason = "";
-      videoStream = stream;
-      els.videoPreview.srcObject = stream;
+      let recordingStream = null;
+      try {
+        const overlayBuildResult = await buildOverlayRecordingStream(stream);
+        recordingStream = overlayBuildResult.stream;
+      } catch (overlayErr) {
+        stream.getTracks().forEach((track) => track.stop());
+        const message = overlayErr?.message || "Ошибка подготовки timestamp-оверлея";
+        videoStartBlockedReason = message;
+        setStatus(message, "bad");
+        logLine(`[VIDEO OVERLAY ERR] ${message}`);
+        updateVideoUi();
+        return;
+      }
+
+      rawVideoStream = stream;
+      videoStream = recordingStream;
+      overlayVideoStream = recordingStream;
+      els.videoPreview.srcObject = rawVideoStream;
       els.videoPreview.play().catch(() => {});
 
       pendingVideoChunks = [];
       videoStartedAtMs = Date.now();
 
-      const recorder = videoMimeType ? new MediaRecorder(stream, { mimeType: videoMimeType }) : new MediaRecorder(stream);
+      const recorder = videoMimeType
+        ? new MediaRecorder(recordingStream, { mimeType: videoMimeType })
+        : new MediaRecorder(recordingStream);
       mediaRecorder = recorder;
       recorder.ondataavailable = (event) => {
         if (event.data && event.data.size > 0) {
@@ -861,7 +977,7 @@
       };
       recorder.start(VIDEO_CHUNK_MS);
       logLine(`[VIDEO START] session=${sessionId}`);
-      setStatus("Видеозапись запущена (локально на телефон)", "ok");
+      setStatus("Видеозапись запущена (локально на телефон, timestamp UTC каждые 0.5 сек)", "ok");
       updateVideoUi();
     }
 
