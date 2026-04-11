@@ -891,7 +891,11 @@
       els.outboxSyncStatus.classList.remove("status-bad");
     }
 
-    async function startVideoRecording() {
+    async function startVideoRecording(options = {}) {
+      const {
+        startedStatusType = "ok",
+        startedStatusText = "Видеозапись запущена (локально на телефон, timestamp UTC каждые 0.5 сек)"
+      } = options;
       if (!sessionId) {
         videoStartBlockedReason = "Сначала запустите смену, затем включайте запись";
         setStatus("Сначала запустите сессию, потом включайте видео", "warn");
@@ -977,7 +981,7 @@
       };
       recorder.start(VIDEO_CHUNK_MS);
       logLine(`[VIDEO START] session=${sessionId}`);
-      setStatus("Видеозапись запущена (локально на телефон, timestamp UTC каждые 0.5 сек)", "ok");
+      setStatus(startedStatusText, startedStatusType);
       updateVideoUi();
     }
 
@@ -1854,7 +1858,10 @@
         await activateRealtimeCapture();
         if (AUTO_START_VIDEO_ON_SESSION_START) {
           try {
-            await startVideoRecording();
+            await startVideoRecording({
+              startedStatusType: "warn",
+              startedStatusText: "Видеозапись включена автоматически"
+            });
           } catch (videoError) {
             const errMsg = videoError?.message || "Не удалось автостартовать видеозапись";
             logLine(`[VIDEO AUTOSTART ERR] ${errMsg}`);
