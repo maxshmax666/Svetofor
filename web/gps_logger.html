@@ -206,6 +206,15 @@
       color: #ffd2d1;
       font-size: 14px;
     }
+    .readiness-row {
+      margin-top: 12px;
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+    }
+    .settings-cta {
+      width: 100%;
+    }
 
     .coord-btn {
       width: 100%;
@@ -435,7 +444,12 @@
         </div>
         <button class="primary" id="driverShiftActionBtn">Начать смену</button>
       </div>
-      <div class="critical-alerts" id="criticalAlerts"></div>
+      <div class="kv readiness-row" id="driverReadinessPanel">
+        <div class="k">Готовность к старту</div>
+        <div class="v status-ok" id="driverReadinessStatus">Готов к работе</div>
+        <button type="button" id="driverSettingsBtn" class="warn settings-cta hidden">Открыть настройки</button>
+      </div>
+      <div class="critical-alerts hidden" id="criticalAlerts"></div>
     </div>
 
     <div class="panel" id="legacyOperationalView">
@@ -487,6 +501,7 @@
           <div class="kv"><div class="k">Последнее client time</div><div class="v" id="lastClientTime">—</div></div>
           <div class="kv"><div class="k">Последнее server time</div><div class="v" id="lastServerTime">—</div></div>
           <div class="kv"><div class="k">Permission matrix</div><div class="v mono" id="permissionMatrix">geo=unknown | camera=unknown | microphone=unknown | notifications=unknown | sync=unknown | motion=unknown | orientation=unknown | battery=unknown</div></div>
+          <div class="kv"><div class="k">Diagnostics permissions</div><div class="v mono" id="diagnosticsPermissions">camera=unknown | microphone=unknown | notifications=unknown</div></div>
           <div class="kv"><div class="k">Видео готовность</div><div class="v mono" id="videoReadiness">secure_context=unknown | mediaDevices=unknown | mediaRecorder=unknown | camera_permission=unknown</div></div>
           <div class="kv"><div class="k">Session ID</div><div class="v mono" id="sessionId">—</div></div>
           <div class="kv"><div class="k">Последнее обновление</div><div class="v" id="lastUpdateTime">—</div></div>
@@ -569,6 +584,7 @@
     <div class="nav-item">Синхр.</div>
   </nav>
 
+  <script src="/permission_ui_state.js"></script>
   <script>
     let watchId = null;
     let sessionId = null;
@@ -664,6 +680,8 @@
       driverOperationalView: document.getElementById("driverOperationalView"),
       driverShiftStatus: document.getElementById("driverShiftStatus"),
       driverShiftActionBtn: document.getElementById("driverShiftActionBtn"),
+      driverReadinessStatus: document.getElementById("driverReadinessStatus"),
+      driverSettingsBtn: document.getElementById("driverSettingsBtn"),
       criticalAlerts: document.getElementById("criticalAlerts"),
       diagnosticsView: document.getElementById("diagnosticsView"),
       infoSection: document.getElementById("infoSection"),
@@ -676,6 +694,7 @@
       videoFileMeta: document.getElementById("videoFileMeta"),
       videoPreview: document.getElementById("videoPreview"),
       permissionMatrix: document.getElementById("permissionMatrix"),
+      diagnosticsPermissions: document.getElementById("diagnosticsPermissions"),
       videoReadiness: document.getElementById("videoReadiness"),
       logLevelFilter: document.getElementById("logLevelFilter"),
       logCategoryFilters: document.getElementById("logCategoryFilters"),
@@ -787,9 +806,34 @@
       return [...new Set(alerts)];
     }
 
+    function getPermissionUiState() {
+      if (!window.permissionUiState?.mapPermissionStateToUiState) {
+        return { statusText: "Готов к работе", statusTone: "ok", blockingIssues: [], cta: null };
+      }
+      return window.permissionUiState.mapPermissionStateToUiState(permissionMatrix, {
+        hasGeolocationApi: Boolean(navigator.geolocation),
+      });
+    }
+
+    function openGeoSettings() {
+      const fallback = () => {
+        setStatus("Не удалось открыть настройки автоматически. Включите геолокацию вручную.", "warn");
+      };
+      if (!window.permissionUiState?.openSettingsDeepLink) {
+        fallback();
+        return;
+      }
+      window.permissionUiState.openSettingsDeepLink({
+        userAgent: navigator.userAgent,
+        openWindow: (url) => window.open(url, "_blank"),
+        onFallback: fallback,
+      });
+    }
+
     function renderDriverOperationalView() {
       if (!els.driverOperationalView) return;
       const sessionActive = Boolean(sessionId);
+      const permissionUiState = getPermissionUiState();
       if (els.driverShiftStatus) {
         els.driverShiftStatus.textContent = sessionActive ? "в смене" : "не в смене";
         els.driverShiftStatus.className = `v ${sessionActive ? "status-ok" : "status-warn"}`;
@@ -798,6 +842,15 @@
         els.driverShiftActionBtn.textContent = sessionActive ? "Завершить смену" : "Начать смену";
         els.driverShiftActionBtn.classList.toggle("warn", sessionActive);
         els.driverShiftActionBtn.classList.toggle("primary", !sessionActive);
+      }
+      if (els.driverReadinessStatus) {
+        const toneClass = permissionUiState.statusTone === "ok" ? "status-ok" : "status-bad";
+        els.driverReadinessStatus.className = `v ${toneClass}`;
+        els.driverReadinessStatus.textContent = permissionUiState.statusText;
+      }
+      if (els.driverSettingsBtn) {
+        const showSettingsCta = permissionUiState.cta?.action === "open_settings";
+        els.driverSettingsBtn.classList.toggle("hidden", !showSettingsCta);
       }
       if (els.criticalAlerts) {
         const alerts = getCriticalAlerts();
@@ -1544,6 +1597,9 @@
     function renderPermissionMatrix() {
       if (!els.permissionMatrix) return;
       els.permissionMatrix.textContent = `geo=${permissionMatrix.geo} | camera=${permissionMatrix.camera} | microphone=${permissionMatrix.microphone} | notifications=${permissionMatrix.notifications} | sync=${permissionMatrix.sync} | motion=${permissionMatrix.motion} | orientation=${permissionMatrix.orientation} | battery=${permissionMatrix.battery}`;
+      if (els.diagnosticsPermissions) {
+        els.diagnosticsPermissions.textContent = `camera=${permissionMatrix.camera} | microphone=${permissionMatrix.microphone} | notifications=${permissionMatrix.notifications}`;
+      }
       renderVideoReadiness();
     }
 
@@ -2492,6 +2548,9 @@
           logLine(`[SESSION TOGGLE ERR] ${e.message}`);
         });
       });
+    }
+    if (els.driverSettingsBtn) {
+      els.driverSettingsBtn.addEventListener("click", openGeoSettings);
     }
 
     els.startBtn.addEventListener("click", () => {
