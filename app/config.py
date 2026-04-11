@@ -1,4 +1,12 @@
+import os
 from pathlib import Path
+
+
+def _read_bool_env(name: str, default: bool = False) -> bool:
+    raw = os.getenv(name)
+    if raw is None:
+        return default
+    return raw.strip().lower() in {"1", "true", "yes", "on"}
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 APP_DIR = BASE_DIR / "app"
@@ -17,6 +25,9 @@ SESSIONS_QUERY_INDEX_FILE = MANIFESTS_DIR / "sessions_index.json"  # upsert quer
 HOST = "127.0.0.1"
 PORT = 18080
 TIMEZONE_NAME = "UTC"
+DRIVER_SIMPLIFIED_GPS_SCREEN = _read_bool_env("DRIVER_SIMPLIFIED_GPS_SCREEN", False)
+GPS_LOGGER_DEBUG_MODE = _read_bool_env("GPS_LOGGER_DEBUG_MODE", False)
+GPS_LOGGER_ROLE = os.getenv("GPS_LOGGER_ROLE", "driver").strip().lower() or "driver"
 
 CSV_HEADER = [
     "session_id",

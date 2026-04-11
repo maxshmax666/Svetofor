@@ -7,6 +7,9 @@ from pathlib import Path
 from flask import Flask, jsonify, request, send_file, Response
 
 from app.config import (
+    DRIVER_SIMPLIFIED_GPS_SCREEN,
+    GPS_LOGGER_DEBUG_MODE,
+    GPS_LOGGER_ROLE,
     HOST,
     PORT,
     RUN_DIR,
@@ -101,6 +104,20 @@ def health():
         "timezone": TIMEZONE_NAME,
         "run_dir": str(RUN_DIR),
         "sessions_dir": str(SESSIONS_DIR),
+    })
+
+
+@app.get("/api/client-config")
+def api_client_config():
+    return jsonify({
+        "ok": True,
+        "config": {
+            "featureFlags": {
+                "driver_simplified_gps_screen": DRIVER_SIMPLIFIED_GPS_SCREEN,
+            },
+            "role": GPS_LOGGER_ROLE,
+            "isDebugMode": GPS_LOGGER_DEBUG_MODE,
+        },
     })
 
 
