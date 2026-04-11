@@ -50,9 +50,9 @@
     .sub { color:var(--muted); margin-bottom:18px; font-size:15px; }
     .panel {
       background:var(--panel);
-      border:1px solid var(--border);
+      border:1px solid rgba(110, 135, 205, 0.12);
       border-radius:18px;
-      padding:16px;
+      padding:18px 16px;
       margin-bottom:16px;
       box-shadow:var(--glass-shadow);
       backdrop-filter: blur(8px);
@@ -66,8 +66,7 @@
     .primary-controls {
       display: flex;
       flex-direction: column;
-      gap: 10px;
-      margin-bottom: 10px;
+      gap: 12px;
     }
     .control-hint {
       color: var(--muted);
@@ -128,7 +127,7 @@
       background:var(--panel2);
       border-radius:14px;
       padding:12px 14px;
-      border:1px solid var(--border);
+      border:1px solid rgba(110, 135, 205, 0.16);
     }
     .kv .k {
       color:var(--muted);
@@ -207,14 +206,74 @@
       font-size: 14px;
     }
     .readiness-row {
-      margin-top: 12px;
+      margin-top: 14px;
       display: flex;
       flex-direction: column;
-      gap: 10px;
+      gap: 6px;
     }
     .settings-cta {
       width: 100%;
     }
+    .driver-operational {
+      padding: 20px 16px;
+    }
+    .driver-shift-hero {
+      padding-bottom: 14px;
+    }
+    .driver-shift-label {
+      color: var(--muted);
+      font-size: 14px;
+      margin-bottom: 2px;
+    }
+    .driver-shift-value {
+      font-size: 42px;
+      line-height: 1.05;
+      font-weight: 800;
+      margin-bottom: 14px;
+      letter-spacing: -0.02em;
+    }
+    .driver-shift-value.status-ok { color: #a2f0bc; }
+    .driver-shift-value.status-warn,
+    .driver-shift-value.status-bad { color: #ffd5a0; }
+    .driver-primary-cta {
+      width: 100%;
+    }
+    .driver-health {
+      border-top: 1px solid rgba(110, 135, 205, 0.2);
+      padding-top: 14px;
+      margin-top: 14px;
+    }
+    .driver-health-title {
+      color: var(--muted);
+      font-size: 13px;
+      margin-bottom: 4px;
+      text-transform: uppercase;
+      letter-spacing: .05em;
+    }
+    .driver-health-line {
+      font-size: 16px;
+      font-weight: 600;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    .diagnostics-hint {
+      margin-top: 14px;
+      border-top: 1px solid rgba(110, 135, 205, 0.2);
+      padding-top: 12px;
+    }
+    .diagnostics-link {
+      color: #9ec0ff;
+      background: transparent;
+      border: 0;
+      padding: 0;
+      min-height: auto;
+      box-shadow: none;
+      font-size: 14px;
+      text-decoration: underline;
+      justify-content: flex-start;
+    }
+    .diagnostics-link:hover { color: #bfd6ff; background: transparent; }
 
     .coord-btn {
       width: 100%;
@@ -429,6 +488,36 @@
         font-size: 18px;
       }
     }
+    @media (max-height:667px) {
+      .wrap {
+        padding: 10px 12px 90px;
+      }
+      h1 {
+        font-size: 32px;
+        margin-bottom: 4px;
+      }
+      .sub {
+        margin-bottom: 10px;
+        font-size: 13px;
+      }
+      .driver-operational {
+        padding: 14px 12px;
+      }
+      .driver-shift-value {
+        font-size: 34px;
+        margin-bottom: 10px;
+      }
+      button, a.btn {
+        min-height: 46px;
+      }
+      .driver-health {
+        margin-top: 10px;
+        padding-top: 10px;
+      }
+      .driver-health-line {
+        font-size: 15px;
+      }
+    }
   </style>
 </head>
 <body>
@@ -436,20 +525,21 @@
     <h1>GPS</h1>
     <div class="sub">GPS логгер курьера</div>
 
-    <div class="panel hidden" id="driverOperationalView">
-      <div class="primary-controls">
-        <div class="kv">
-          <div class="k">Смена</div>
-          <div class="v" id="driverShiftStatus">не в смене</div>
-        </div>
-        <button class="primary" id="driverShiftActionBtn">Начать смену</button>
+    <div class="panel driver-operational hidden" id="driverOperationalView">
+      <div class="driver-shift-hero">
+        <div class="driver-shift-label">Смена</div>
+        <div class="driver-shift-value status-warn" id="driverShiftStatus">не в смене</div>
+        <button class="primary driver-primary-cta" id="driverShiftActionBtn">Начать смену</button>
       </div>
-      <div class="kv readiness-row" id="driverReadinessPanel">
-        <div class="k">Готовность к старту</div>
-        <div class="v status-ok" id="driverReadinessStatus">Готов к работе</div>
+      <div class="driver-health" id="driverReadinessPanel">
+        <div class="driver-health-title">System health</div>
+        <div class="driver-health-line status-ok" id="driverReadinessStatus">Готов к работе</div>
         <button type="button" id="driverSettingsBtn" class="warn settings-cta hidden">Открыть настройки</button>
       </div>
       <div class="critical-alerts hidden" id="criticalAlerts"></div>
+      <div class="diagnostics-hint hidden" id="driverDiagnosticsHint">
+        <button type="button" class="diagnostics-link" id="driverDiagnosticsBtn">Почему не стартует смена?</button>
+      </div>
     </div>
 
     <div class="panel" id="legacyOperationalView">
@@ -512,27 +602,30 @@
           <span class="mono">denied</span> = явный запрет пользователя/системы.
         </div>
         </div>
-        <div id="eventLogSection">
-          <h3 class="small" style="margin-top:12px;">Журнал событий</h3>
-        <div class="log-filters">
-          <div class="log-filter-group" id="logCategoryFilters">
-            <label><input type="checkbox" value="VIDEO" checked>VIDEO</label>
-            <label><input type="checkbox" value="GPS" checked>GPS</label>
-            <label><input type="checkbox" value="SENSOR" checked>SENSOR</label>
-            <label><input type="checkbox" value="SYNC" checked>SYNC</label>
-            <label><input type="checkbox" value="SESSION" checked>SESSION</label>
-          </div>
-          <div class="log-filter-group">
-            <label for="logLevelFilter">Min level</label>
-            <select id="logLevelFilter">
-              <option value="info">info</option>
-              <option value="warn">warn</option>
-              <option value="error">error</option>
-            </select>
-          </div>
-        </div>
-        <div style="margin-top:10px;">
-          <div class="logbox" id="logView">Пока пусто.</div>
+        <div id="eventLogSection" class="hidden">
+          <details>
+            <summary class="small">Журнал событий (debug)</summary>
+            <div class="log-filters">
+              <div class="log-filter-group" id="logCategoryFilters">
+                <label><input type="checkbox" value="VIDEO" checked>VIDEO</label>
+                <label><input type="checkbox" value="GPS" checked>GPS</label>
+                <label><input type="checkbox" value="SENSOR" checked>SENSOR</label>
+                <label><input type="checkbox" value="SYNC" checked>SYNC</label>
+                <label><input type="checkbox" value="SESSION" checked>SESSION</label>
+              </div>
+              <div class="log-filter-group">
+                <label for="logLevelFilter">Min level</label>
+                <select id="logLevelFilter">
+                  <option value="info">info</option>
+                  <option value="warn">warn</option>
+                  <option value="error">error</option>
+                </select>
+              </div>
+            </div>
+            <div style="margin-top:10px;">
+              <div class="logbox" id="logView">Пока пусто.</div>
+            </div>
+          </details>
         </div>
         </div>
       </details>
@@ -683,6 +776,8 @@
       driverReadinessStatus: document.getElementById("driverReadinessStatus"),
       driverSettingsBtn: document.getElementById("driverSettingsBtn"),
       criticalAlerts: document.getElementById("criticalAlerts"),
+      driverDiagnosticsHint: document.getElementById("driverDiagnosticsHint"),
+      driverDiagnosticsBtn: document.getElementById("driverDiagnosticsBtn"),
       diagnosticsView: document.getElementById("diagnosticsView"),
       infoSection: document.getElementById("infoSection"),
       eventLogSection: document.getElementById("eventLogSection"),
@@ -834,9 +929,11 @@
       if (!els.driverOperationalView) return;
       const sessionActive = Boolean(sessionId);
       const permissionUiState = getPermissionUiState();
+      const criticalAlerts = getCriticalAlerts();
+      const hasStartupIssue = permissionUiState.statusTone !== "ok" || criticalAlerts.length > 0;
       if (els.driverShiftStatus) {
         els.driverShiftStatus.textContent = sessionActive ? "в смене" : "не в смене";
-        els.driverShiftStatus.className = `v ${sessionActive ? "status-ok" : "status-warn"}`;
+        els.driverShiftStatus.className = `driver-shift-value ${sessionActive ? "status-ok" : "status-warn"}`;
       }
       if (els.driverShiftActionBtn) {
         els.driverShiftActionBtn.textContent = sessionActive ? "Завершить смену" : "Начать смену";
@@ -845,7 +942,7 @@
       }
       if (els.driverReadinessStatus) {
         const toneClass = permissionUiState.statusTone === "ok" ? "status-ok" : "status-bad";
-        els.driverReadinessStatus.className = `v ${toneClass}`;
+        els.driverReadinessStatus.className = `driver-health-line ${toneClass}`;
         els.driverReadinessStatus.textContent = permissionUiState.statusText;
       }
       if (els.driverSettingsBtn) {
@@ -853,29 +950,41 @@
         els.driverSettingsBtn.classList.toggle("hidden", !showSettingsCta);
       }
       if (els.criticalAlerts) {
-        const alerts = getCriticalAlerts();
         els.criticalAlerts.replaceChildren();
-        if (!alerts.length) {
+        if (!criticalAlerts.length) {
           els.criticalAlerts.classList.add("hidden");
-          return;
+        } else {
+          const fragment = document.createDocumentFragment();
+          criticalAlerts.forEach((alertText) => {
+            const node = document.createElement("div");
+            node.className = "critical-alert";
+            node.textContent = alertText;
+            fragment.appendChild(node);
+          });
+          els.criticalAlerts.appendChild(fragment);
+          els.criticalAlerts.classList.remove("hidden");
         }
-        const fragment = document.createDocumentFragment();
-        alerts.forEach((alertText) => {
-          const node = document.createElement("div");
-          node.className = "critical-alert";
-          node.textContent = alertText;
-          fragment.appendChild(node);
-        });
-        els.criticalAlerts.appendChild(fragment);
-        els.criticalAlerts.classList.remove("hidden");
+      }
+      if (els.driverDiagnosticsHint) {
+        els.driverDiagnosticsHint.classList.toggle("hidden", !hasStartupIssue);
       }
     }
 
     function renderDiagnosticsView() {
       const showDiagnostics = shouldRenderDiagnostics();
       if (els.infoSection) els.infoSection.classList.toggle("hidden", !showDiagnostics);
-      if (els.eventLogSection) els.eventLogSection.classList.toggle("hidden", !showDiagnostics);
+      if (els.eventLogSection) els.eventLogSection.classList.toggle("hidden", !showDiagnostics || !isDebugMode);
       if (els.diagnosticsView) els.diagnosticsView.classList.toggle("hidden", !showDiagnostics);
+    }
+
+    function openDiagnosticsFromHint() {
+      if (!shouldRenderDiagnostics()) return;
+      if (els.diagnosticsView) els.diagnosticsView.classList.remove("hidden");
+      const detailsNode = document.getElementById("techDetails");
+      if (detailsNode) detailsNode.open = true;
+      if (els.diagnosticsView?.scrollIntoView) {
+        els.diagnosticsView.scrollIntoView({ behavior: "smooth", block: "start" });
+      }
     }
 
     function applyUiVariants() {
@@ -2551,6 +2660,9 @@
     }
     if (els.driverSettingsBtn) {
       els.driverSettingsBtn.addEventListener("click", openGeoSettings);
+    }
+    if (els.driverDiagnosticsBtn) {
+      els.driverDiagnosticsBtn.addEventListener("click", openDiagnosticsFromHint);
     }
 
     els.startBtn.addEventListener("click", () => {
