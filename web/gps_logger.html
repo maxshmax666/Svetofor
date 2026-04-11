@@ -191,6 +191,21 @@
 
     .small { color:var(--muted); font-size:13px; }
     .mono { font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; }
+    .hidden { display: none !important; }
+    .critical-alerts {
+      margin-top: 12px;
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+    }
+    .critical-alert {
+      border: 1px solid rgba(255, 98, 95, 0.45);
+      border-radius: 10px;
+      padding: 10px 12px;
+      background: rgba(91, 14, 22, 0.5);
+      color: #ffd2d1;
+      font-size: 14px;
+    }
 
     .coord-btn {
       width: 100%;
@@ -412,7 +427,19 @@
     <h1>GPS</h1>
     <div class="sub">GPS логгер курьера</div>
 
-    <div class="panel">
+    <div class="panel hidden" id="driverOperationalView">
+      <div class="primary-controls">
+        <div class="kv">
+          <div class="k">Смена</div>
+          <div class="v" id="driverShiftStatus">не в смене</div>
+        </div>
+        <button class="primary" id="driverShiftActionBtn">Начать смену</button>
+        <div class="control-hint" id="driverOperationalHint">Ручной запуск смены.</div>
+      </div>
+      <div class="critical-alerts" id="criticalAlerts"></div>
+    </div>
+
+    <div class="panel" id="legacyOperationalView">
       <div class="primary-controls">
         <button class="primary" id="sessionToggleBtn">Начать смену</button>
         <div class="control-hint" id="sessionToggleHint">Ручной запуск смены.</div>
@@ -450,9 +477,11 @@
       </details>
     </div>
 
-    <div class="panel">
+    <div class="panel" id="diagnosticsView">
       <details id="techDetails">
         <summary class="small">Техническая информация и debug</summary>
+        <div id="infoSection">
+          <h3 class="small" style="margin-top:10px;">Информация</h3>
         <div class="grid" style="margin-top:10px;">
           <div class="kv"><div class="k">GPS точек</div><div class="v" id="sentCount">0</div></div>
           <div class="kv"><div class="k">Sensor events</div><div class="v" id="sensorCount">0</div></div>
@@ -468,6 +497,9 @@
           Легенда: <span class="mono">unavailable</span> = API не поддерживается устройством/браузером;
           <span class="mono">denied</span> = явный запрет пользователя/системы.
         </div>
+        </div>
+        <div id="eventLogSection">
+          <h3 class="small" style="margin-top:12px;">Журнал событий</h3>
         <div class="log-filters">
           <div class="log-filter-group" id="logCategoryFilters">
             <label><input type="checkbox" value="VIDEO" checked>VIDEO</label>
@@ -487,6 +519,7 @@
         </div>
         <div style="margin-top:10px;">
           <div class="logbox" id="logView">Пока пусто.</div>
+        </div>
         </div>
       </details>
     </div>
@@ -608,6 +641,11 @@
     let lastBatteryAt = 0;
     let isSessionStarting = false;
     let outboxFlushIntervalId = null;
+    let isDebugMode = false;
+    let currentUserRole = "driver";
+    let isSimplifiedGpsScreenEnabled = false;
+    let lastStatusType = "warn";
+    const CRITICAL_RUNTIME_ALERTS = new Map();
 
     const els = {
       status: document.getElementById("status"),
@@ -623,6 +661,15 @@
       stopBtn: document.getElementById("stopBtn"),
       sessionToggleBtn: document.getElementById("sessionToggleBtn"),
       sessionToggleHint: document.getElementById("sessionToggleHint"),
+      legacyOperationalView: document.getElementById("legacyOperationalView"),
+      driverOperationalView: document.getElementById("driverOperationalView"),
+      driverShiftStatus: document.getElementById("driverShiftStatus"),
+      driverShiftActionBtn: document.getElementById("driverShiftActionBtn"),
+      driverOperationalHint: document.getElementById("driverOperationalHint"),
+      criticalAlerts: document.getElementById("criticalAlerts"),
+      diagnosticsView: document.getElementById("diagnosticsView"),
+      infoSection: document.getElementById("infoSection"),
+      eventLogSection: document.getElementById("eventLogSection"),
       videoStartBtn: document.getElementById("videoStartBtn"),
       videoStopBtn: document.getElementById("videoStopBtn"),
       exportBtn: document.getElementById("exportBtn"),
@@ -703,6 +750,122 @@
         : "Ручной запуск смены. Видео опционально: при отказе доступ к GPS сохранится, но запись видео будет недоступна.";
     }
 
+    function parseBoolean(value, fallback = false) {
+      if (typeof value === "boolean") return value;
+      if (typeof value === "string") {
+        return ["1", "true", "yes", "on"].includes(value.trim().toLowerCase());
+      }
+      return fallback;
+    }
+
+    function resolveRole(rawRole) {
+      const role = String(rawRole || "").trim().toLowerCase();
+      return role || "driver";
+    }
+
+    function isPrivilegedRole(role) {
+      return role === "admin" || role === "support";
+    }
+
+    function shouldRenderDiagnostics() {
+      return isDebugMode || isPrivilegedRole(currentUserRole);
+    }
+
+    function upsertCriticalAlert(key, message) {
+      if (!message) {
+        CRITICAL_RUNTIME_ALERTS.delete(key);
+      } else {
+        CRITICAL_RUNTIME_ALERTS.set(key, message);
+      }
+      renderDriverOperationalView();
+    }
+
+    function getCriticalAlerts() {
+      const alerts = [...CRITICAL_RUNTIME_ALERTS.values()];
+      const geoState = permissionMatrix.geo;
+      if (!navigator.geolocation || geoState === "denied" || geoState === "error" || geoState === "unavailable") {
+        alerts.push("Геолокация выключена или недоступна: запуск смены заблокирован.");
+      }
+      return [...new Set(alerts)];
+    }
+
+    function renderDriverOperationalView() {
+      if (!els.driverOperationalView) return;
+      const sessionActive = Boolean(sessionId);
+      if (els.driverShiftStatus) {
+        els.driverShiftStatus.textContent = sessionActive ? "в смене" : "не в смене";
+        els.driverShiftStatus.className = `v ${sessionActive ? "status-ok" : "status-warn"}`;
+      }
+      if (els.driverShiftActionBtn) {
+        els.driverShiftActionBtn.textContent = sessionActive ? "Завершить смену" : "Начать смену";
+        els.driverShiftActionBtn.classList.toggle("warn", sessionActive);
+        els.driverShiftActionBtn.classList.toggle("primary", !sessionActive);
+      }
+      if (els.driverOperationalHint) {
+        const hints = [];
+        if (lastStatusType === "bad") hints.push("Есть критические ограничения для старта.");
+        hints.push(getSessionUiHint({ sessionActive, mode: "manual" }));
+        els.driverOperationalHint.textContent = hints.join(" ");
+      }
+      if (els.criticalAlerts) {
+        const alerts = getCriticalAlerts();
+        els.criticalAlerts.replaceChildren();
+        if (!alerts.length) {
+          els.criticalAlerts.classList.add("hidden");
+          return;
+        }
+        const fragment = document.createDocumentFragment();
+        alerts.forEach((alertText) => {
+          const node = document.createElement("div");
+          node.className = "critical-alert";
+          node.textContent = alertText;
+          fragment.appendChild(node);
+        });
+        els.criticalAlerts.appendChild(fragment);
+        els.criticalAlerts.classList.remove("hidden");
+      }
+    }
+
+    function applyUiVariants() {
+      const showDiagnostics = shouldRenderDiagnostics();
+      if (els.infoSection) els.infoSection.classList.toggle("hidden", !showDiagnostics);
+      if (els.eventLogSection) els.eventLogSection.classList.toggle("hidden", !showDiagnostics);
+      if (els.diagnosticsView) els.diagnosticsView.classList.toggle("hidden", !showDiagnostics);
+
+      if (isSimplifiedGpsScreenEnabled) {
+        if (els.driverOperationalView) els.driverOperationalView.classList.remove("hidden");
+        if (els.legacyOperationalView) els.legacyOperationalView.classList.add("hidden");
+      } else {
+        if (els.driverOperationalView) els.driverOperationalView.classList.add("hidden");
+        if (els.legacyOperationalView) els.legacyOperationalView.classList.remove("hidden");
+      }
+      renderDriverOperationalView();
+    }
+
+    async function loadClientConfig() {
+      const query = new URLSearchParams(window.location.search);
+      let remoteConfig = {};
+      try {
+        const response = await fetch("/api/client-config", { cache: "no-store" });
+        const payload = await response.json();
+        if (response.ok && payload?.ok && payload.config && typeof payload.config === "object") {
+          remoteConfig = payload.config;
+        }
+      } catch (e) {
+        logLine(`[CONFIG WARN] ${e.message || "Не удалось загрузить /api/client-config"}`);
+      }
+      const queryRole = query.get("role");
+      const queryDebug = query.get("debug");
+      const queryFlag = query.get("driver_simplified_gps_screen");
+      currentUserRole = resolveRole(queryRole ?? remoteConfig.role);
+      isDebugMode = parseBoolean(queryDebug ?? remoteConfig.isDebugMode, false);
+      isSimplifiedGpsScreenEnabled = parseBoolean(
+        queryFlag ?? remoteConfig?.featureFlags?.driver_simplified_gps_screen,
+        false
+      );
+      applyUiVariants();
+    }
+
     function updateSessionToggleUi({ mode = "manual" } = {}) {
       const sessionActive = Boolean(sessionId);
       if (!els.sessionToggleBtn) return;
@@ -715,6 +878,7 @@
       if (els.sessionToggleHint) {
         els.sessionToggleHint.textContent = hintText;
       }
+      renderDriverOperationalView();
     }
 
     function updateVideoUi({ mode = "manual" } = {}) {
@@ -1279,8 +1443,10 @@
 
     function setStatus(text, type="ok") {
       const cls = type === "ok" ? "status-ok" : type === "warn" ? "status-warn" : "status-bad";
+      lastStatusType = type;
       els.status.className = cls;
       els.status.textContent = text;
+      renderDriverOperationalView();
     }
 
     function logLine(input) {
@@ -1402,6 +1568,10 @@
       if (Object.prototype.hasOwnProperty.call(permissionMatrix, normalizedScope)) {
         permissionMatrix[normalizedScope] = normalizedStatus;
         renderPermissionMatrix();
+      }
+      if (normalizedScope === "geo") {
+        const geoBlocked = normalizedStatus === "denied" || normalizedStatus === "error" || normalizedStatus === "unavailable";
+        upsertCriticalAlert("geo-blocked", geoBlocked ? "Геолокация выключена или запрещена." : "");
       }
       const reason = PERMISSION_REASONS.has(meta.reason) ? meta.reason : "api_unavailable";
       const source = PERMISSION_SOURCES.has(meta.source) ? meta.source : "permissions_api";
@@ -2293,6 +2463,12 @@
       }
     });
 
+    loadClientConfig().catch((e) => {
+      logLine(`[CONFIG WARN] ${e.message}`);
+    }).finally(() => {
+      applyUiVariants();
+    });
+
     registerServiceWorker().then(async () => {
       await flushOutboxInPage(100);
       ensureBackgroundFlushLoop();
@@ -2313,6 +2489,15 @@
         logLine(`[SESSION TOGGLE ERR] ${e.message}`);
       });
     });
+    if (els.driverShiftActionBtn) {
+      els.driverShiftActionBtn.addEventListener("click", () => {
+        const action = sessionId ? stopSession() : startSession({ mode: "manual" });
+        action.catch((e) => {
+          setStatus(`Ошибка управления сессией: ${e.message}`, "bad");
+          logLine(`[SESSION TOGGLE ERR] ${e.message}`);
+        });
+      });
+    }
 
     els.startBtn.addEventListener("click", () => {
       startSession({ mode: "manual" }).catch((e) => {
