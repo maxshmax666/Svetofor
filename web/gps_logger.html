@@ -434,7 +434,6 @@
           <div class="v" id="driverShiftStatus">не в смене</div>
         </div>
         <button class="primary" id="driverShiftActionBtn">Начать смену</button>
-        <div class="control-hint" id="driverOperationalHint">Ручной запуск смены.</div>
       </div>
       <div class="critical-alerts" id="criticalAlerts"></div>
     </div>
@@ -665,7 +664,6 @@
       driverOperationalView: document.getElementById("driverOperationalView"),
       driverShiftStatus: document.getElementById("driverShiftStatus"),
       driverShiftActionBtn: document.getElementById("driverShiftActionBtn"),
-      driverOperationalHint: document.getElementById("driverOperationalHint"),
       criticalAlerts: document.getElementById("criticalAlerts"),
       diagnosticsView: document.getElementById("diagnosticsView"),
       infoSection: document.getElementById("infoSection"),
@@ -801,12 +799,6 @@
         els.driverShiftActionBtn.classList.toggle("warn", sessionActive);
         els.driverShiftActionBtn.classList.toggle("primary", !sessionActive);
       }
-      if (els.driverOperationalHint) {
-        const hints = [];
-        if (lastStatusType === "bad") hints.push("Есть критические ограничения для старта.");
-        hints.push(getSessionUiHint({ sessionActive, mode: "manual" }));
-        els.driverOperationalHint.textContent = hints.join(" ");
-      }
       if (els.criticalAlerts) {
         const alerts = getCriticalAlerts();
         els.criticalAlerts.replaceChildren();
@@ -826,12 +818,15 @@
       }
     }
 
-    function applyUiVariants() {
+    function renderDiagnosticsView() {
       const showDiagnostics = shouldRenderDiagnostics();
       if (els.infoSection) els.infoSection.classList.toggle("hidden", !showDiagnostics);
       if (els.eventLogSection) els.eventLogSection.classList.toggle("hidden", !showDiagnostics);
       if (els.diagnosticsView) els.diagnosticsView.classList.toggle("hidden", !showDiagnostics);
+    }
 
+    function applyUiVariants() {
+      renderDiagnosticsView();
       if (isSimplifiedGpsScreenEnabled) {
         if (els.driverOperationalView) els.driverOperationalView.classList.remove("hidden");
         if (els.legacyOperationalView) els.legacyOperationalView.classList.add("hidden");
